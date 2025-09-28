@@ -4,9 +4,8 @@ FastAPI service powering the walk:ai backend APIs.
 
 ## Getting Started
 
-1. Create a virtual environment: `python -m venv .venv`
-2. Activate it and install dependencies: `pip install -r requirements.txt`
-3. Run the development server: `uvicorn app.main:app --reload`
+1. Sync dependencies with [uv](https://github.com/astral-sh/uv): `uv sync`
+2. Start the development server through uv: `uv run uvicorn app.main:app --reload`
 
 ## Configuration
 
