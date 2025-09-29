@@ -74,7 +74,7 @@ def _require_base_url() -> str:
 
 
 def _get_current_admin_email() -> str:
-    email = True  # os.getenv("ADMIN_EMAIL_ENV")
+    email = os.getenv("ADMIN_EMAIL")
     if not email:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
