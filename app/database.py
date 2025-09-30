@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine, text
@@ -25,7 +26,7 @@ def ping_database() -> bool:
 
 
 @contextmanager
-def get_session() -> Session:
+def get_session() -> Iterator[Session]:
     session: Session = SessionLocal()
     try:
         yield session
