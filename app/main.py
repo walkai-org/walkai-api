@@ -1,47 +1,24 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from datetime import datetime, timedelta
 from typing import Generator
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .database import get_connection, ping_database
+from .database import engine, get_session, ping_database
 from .email_sender import send_invitation_via_acs_smtp
-from .security import generate_raw_token, hash_token
+from .models import Base, Invitation, User
+from .schemas import InviteIn, UserCreate, UserOut
+from .security import generate_raw_token, hash_password, hash_token
 
 settings = get_settings()
 INVITE_TTL_HOURS = 48
 
-
-def _init_db() -> None:
-    """Ensure the invitation table and indexes exist."""
-    with get_connection() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_invitations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL,
-                token_hash TEXT NOT NULL UNIQUE,
-                expires_at TEXT NOT NULL,
-                used_at TEXT,
-                invited_by TEXT
-            )
-            """
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_invitations_email ON user_invitations (email)"
-        )
-        connection.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_invitations_token_hash ON user_invitations (token_hash)"
-        )
-
-
-_init_db()
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="walk:ai API", version="0.1.0")
 
@@ -54,13 +31,8 @@ app.add_middleware(
 )
 
 
-class InviteIn(BaseModel):
-    email: EmailStr
-
-
-def get_db() -> Generator[sqlite3.Connection, None, None]:
-    with get_connection() as connection:
-        yield connection
+def get_db() -> Generator[Session, None, None]:
+    yield from get_session()
 
 
 def _require_base_url() -> str:
@@ -83,29 +55,43 @@ def _get_current_admin_email() -> str:
     return email
 
 
+@app.post("/users", response_model=UserOut, status_code=201)
+def register(payload: UserCreate, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.email == payload.email).first()
+    if existing_user:
+        raise HTTPException(status_code=409, detail="Email ya registrado")
+
+    user = User(
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+        role="admin",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 @app.post("/admin/invitations", status_code=201)
 def create_invitation(
     payload: InviteIn,
     bg: BackgroundTasks,
-    db: sqlite3.Connection = Depends(get_db),
+    db: Session = Depends(get_db),
     current_admin_email: str = Depends(_get_current_admin_email),
 ):
     raw_token = generate_raw_token(32)
     token_hash = hash_token(raw_token)
     expires_at = datetime.utcnow() + timedelta(hours=INVITE_TTL_HOURS)
 
-    db.execute(
-        """
-        INSERT INTO user_invitations (email, token_hash, expires_at, invited_by)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            payload.email,
-            token_hash,
-            expires_at.replace(microsecond=0).isoformat(timespec="seconds") + "Z",
-            current_admin_email,
-        ),
+    invitation = Invitation(
+        email=payload.email,
+        token_hash=token_hash,
+        expires_at=expires_at.replace(microsecond=0),
+        invited_by=current_admin_email,
     )
+
+    db.add(invitation)
+    db.commit()
 
     invitation_link = f"{_require_base_url()}?token={raw_token}"
     bg.add_task(send_invitation_via_acs_smtp, payload.email, invitation_link)
