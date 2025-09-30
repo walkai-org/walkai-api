@@ -12,8 +12,14 @@ from .config import get_settings
 from .database import engine, get_session, ping_database
 from .email_sender import send_invitation_via_acs_smtp
 from .models import Base, Invitation, User
-from .schemas import InviteIn, UserCreate, UserOut
-from .security import generate_raw_token, hash_password, hash_token
+from .schemas import InviteIn, LoginIn, TokenOut, UserCreate, UserOut
+from .security import (
+    create_access,
+    generate_raw_token,
+    hash_password,
+    hash_token,
+    verify_password,
+)
 
 settings = get_settings()
 INVITE_TTL_HOURS = 48
@@ -59,7 +65,7 @@ def _get_current_admin_email() -> str:
 def register(payload: UserCreate, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.email == payload.email).first()
     if existing_user:
-        raise HTTPException(status_code=409, detail="Email ya registrado")
+        raise HTTPException(status_code=409, detail="Email already registered")
 
     user = User(
         email=payload.email,
@@ -70,6 +76,15 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     return user
+
+
+@app.post("/login", response_model=TokenOut)
+def login(payload: LoginIn, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    access = create_access(str(user.id), user.role)
+    return {"access_token": access, "token_type": "bearer"}
 
 
 @app.post("/admin/invitations", status_code=201)
