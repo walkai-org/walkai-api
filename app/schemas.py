@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, SecretStr
 
 
 class InviteIn(BaseModel):
@@ -27,3 +27,16 @@ class TokenOut(BaseModel):
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class InvitationVerifyIn(BaseModel):
+    token: SecretStr
+
+
+class InvitationVerifyOut(BaseModel):
+    email: EmailStr
+
+
+class InvitationAcceptIn(BaseModel):
+    token: SecretStr
+    password: SecretStr
