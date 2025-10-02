@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import os
 import secrets
@@ -47,3 +48,10 @@ def create_token(sub: str, role: str, ttl: timedelta) -> str:
 
 def create_access(sub: str, role: str) -> str:
     return create_token(sub, role, timedelta(minutes=ACCESS_MIN))
+
+
+def gen_pkce():
+    code_verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+    challenge = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(challenge).rstrip(b"=").decode()
+    return code_verifier, code_challenge

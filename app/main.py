@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import datetime, timedelta
 from typing import Generator
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .database import engine, get_session, ping_database
 from .email_sender import send_invitation_via_acs_smtp
-from .models import Base, Invitation, User
+from .models import Base, Invitation, SocialIdentity, User
 from .schemas import (
     InvitationAcceptIn,
     InvitationVerifyIn,
@@ -24,14 +28,27 @@ from .schemas import (
 )
 from .security import (
     create_access,
+    gen_pkce,
     generate_raw_token,
     hash_password,
     hash_token,
     verify_password,
 )
+from .state_redis_store import load_oauth_tx, save_oauth_tx
 
 settings = get_settings()
 INVITE_TTL_HOURS = 48
+
+GITHUB_AUTH = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
+GITHUB_USER = "https://api.github.com/user"
+GITHUB_EMAILS = "https://api.github.com/user/emails"
+
+CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
+CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI")
+FRONTEND_HOME = os.getenv("FRONTEND_HOME")
+SCOPES = "read:user user:email"
 
 Base.metadata.create_all(bind=engine)
 
@@ -78,6 +95,13 @@ def _get_active_invitation(db: Session, token_h: str) -> Invitation | None:
     if inv.used_at is not None or inv.expires_at < now:
         return None
     return inv
+
+
+def _pick_verified_primary_email(emails: list[dict]) -> str | None:
+    for e in emails:
+        if e.get("primary") and e.get("verified"):
+            return e["email"].strip().lower()
+    return None
 
 
 @app.post("/users", response_model=UserOut, status_code=201)
@@ -165,6 +189,135 @@ def accept_invitation(body: InvitationAcceptIn, db: Session = Depends(get_db)):
     inv.used_at = datetime.utcnow()
     db.commit()
     return {"message": "Account created"}
+
+
+@app.get("/oauth/github/start")
+def github_start(invitation_token: str, flow: str):
+    code_verifier, code_challenge = gen_pkce()
+    state = secrets.token_urlsafe(16)
+
+    save_oauth_tx(
+        state,
+        {
+            "code_verifier": code_verifier,
+            "invitation_token": invitation_token,
+            "flow": flow,
+        },
+    )
+
+    params = {
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "scope": SCOPES,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "allow_signup": "false",
+    }
+    return {"authorize_url": f"{GITHUB_AUTH}?{urlencode(params)}"}
+
+
+@app.get("/oauth/github/callback")
+def github_callback(code: str, state: str, db: Session = Depends(get_db)):
+    tx = load_oauth_tx(state)
+    if not tx:
+        raise HTTPException(status_code=400, detail="Invalid state")
+
+    inv = None
+    if tx.get("flow") == "register":
+        inv = (
+            db.query(Invitation)
+            .filter(Invitation.token_hash == hash_token(tx["invitation_token"]))
+            .first()
+        )
+        if not inv or inv.used_at is not None or inv.expires_at < datetime.utcnow():
+            raise HTTPException(status_code=400, detail="Invalid or expired invitation")
+
+    with httpx.Client(timeout=15) as client:
+        tok = client.post(
+            GITHUB_TOKEN,
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": REDIRECT_URI,
+                "code_verifier": tx["code_verifier"],
+            },
+        ).json()
+    access_token = tok.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="OAuth exchange failed")
+
+    authz = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+    with httpx.Client(timeout=15) as client:
+        gh_user = client.get(GITHUB_USER, headers=authz).json()
+        gh_emails = client.get(GITHUB_EMAILS, headers=authz).json()
+
+    provider_user_id = str(gh_user["id"])
+    gh_email = _pick_verified_primary_email(gh_emails)
+    if not gh_email:
+        raise HTTPException(status_code=400, detail="GitHub email not verified")
+
+    if tx.get("flow") == "register":
+        invited_email = inv.email.strip().lower()
+        if gh_email != invited_email:
+            raise HTTPException(
+                status_code=409, detail="Email mismatch with invitation"
+            )
+
+        user = db.query(User).filter(User.email == invited_email).first()
+        if not user:
+            user = User(email=invited_email, password_hash=None, role="user")
+            db.add(user)
+            db.flush()
+
+        si = (
+            db.query(SocialIdentity)
+            .filter(
+                SocialIdentity.provider == "github",
+                SocialIdentity.provider_user_id == provider_user_id,
+            )
+            .first()
+        )
+        if not si:
+            db.add(
+                SocialIdentity(
+                    user_id=user.id,
+                    provider="github",
+                    provider_user_id=provider_user_id,
+                    email_verified=True,
+                )
+            )
+
+        inv.used_at = datetime.utcnow()
+        db.commit()
+    else:
+        si = (
+            db.query(SocialIdentity)
+            .filter(
+                SocialIdentity.provider == "github",
+                SocialIdentity.provider_user_id == provider_user_id,
+            )
+            .first()
+        )
+        if not si:
+            raise HTTPException(status_code=404, detail="No linked GitHub identity")
+        user = db.query(User).filter(User.id == si.user_id).first()
+
+    access = create_access(str(user.id), user.role)
+
+    resp = RedirectResponse(url=FRONTEND_HOME, status_code=303)
+    resp.set_cookie(
+        "access_token",
+        access,
+        httponly=True,
+        secure=True,
+        samesite="Lax",
+        max_age=int(os.getenv("ACCESS_MIN")) * 60,
+        path="/",
+    )
+    return resp
 
 
 @app.get("/health", tags=["health"])
