@@ -7,7 +7,8 @@ from typing import Generator, Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
+import jwt
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
@@ -48,6 +49,9 @@ CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI")
 FRONTEND_HOME = os.getenv("FRONTEND_HOME")
 SCOPES = "read:user user:email"
+
+JWT_SECRET = os.getenv("JWT_SECRET")
+JWT_ALGO = os.getenv("JWT_ALGO")
 
 Base.metadata.create_all(bind=engine)
 
@@ -106,6 +110,32 @@ def _pick_verified_primary_email(emails: list[dict]) -> str | None:
     return None
 
 
+def _unauth(detail="Not authenticated"):
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
+
+
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    token = request.cookies.get("access_token")
+    if not token:
+        _unauth()
+
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+    except jwt.ExpiredSignatureError:
+        _unauth("Session expired")
+    except jwt.InvalidTokenError:
+        _unauth("Invalid token")
+
+    sub = payload.get("sub")
+    if not sub:
+        _unauth("Invalid token payload")
+
+    user = db.query(User).filter(User.id == int(sub)).first()
+    if not user:
+        _unauth("User not found")
+    return user
+
+
 @app.post("/users", response_model=UserOut, status_code=201)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.email == payload.email).first()
@@ -141,7 +171,7 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
         key="access_token",
         value=access,
         httponly=True,
-        secure=True,
+        secure=False,
         samesite="Lax",
         max_age=int(os.getenv("ACCESS_MIN")) * 60,
         path="/",
@@ -333,12 +363,17 @@ def github_callback(code: str, state: str, db: Session = Depends(get_db)):
         "access_token",
         access,
         httponly=True,
-        secure=True,
+        secure=False,
         samesite="Lax",
         max_age=int(os.getenv("ACCESS_MIN")) * 60,
         path="/",
     )
     return resp
+
+
+@app.get("/me", response_model=UserOut)
+def me(user: User = Depends(get_current_user)):
+    return UserOut.model_validate(user)
 
 
 @app.get("/health", tags=["health"])
