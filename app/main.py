@@ -376,6 +376,19 @@ def me(user: User = Depends(get_current_user)):
     return UserOut.model_validate(user)
 
 
+@app.post("/logout")
+def logout():
+    resp = JSONResponse({"message": "ok"})
+    resp.headers["Cache-Control"] = "no-store"
+
+    resp.delete_cookie(
+        key="access_token",
+        path="/",
+    )
+
+    return resp
+
+
 @app.get("/health", tags=["health"])
 def health_check():
     """Report service status and confirm database connectivity."""
