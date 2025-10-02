@@ -3,13 +3,13 @@ from __future__ import annotations
 import os
 import secrets
 from datetime import datetime, timedelta
-from typing import Generator
+from typing import Generator, Optional
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -22,7 +22,6 @@ from .schemas import (
     InvitationVerifyOut,
     InviteIn,
     LoginIn,
-    TokenOut,
     UserCreate,
     UserOut,
 )
@@ -56,7 +55,10 @@ app = FastAPI(title="walk:ai API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -121,13 +123,30 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     return user
 
 
-@app.post("/login", response_model=TokenOut)
+@app.post("/login")
 def login(payload: LoginIn, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
-    if not user or not verify_password(payload.password, user.password_hash):
+    if (
+        not user
+        or not user.password_hash
+        or not verify_password(payload.password, user.password_hash)
+    ):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
     access = create_access(str(user.id), user.role)
-    return {"access_token": access, "token_type": "bearer"}
+
+    resp = JSONResponse({"message": "ok"})
+    resp.headers["Cache-Control"] = "no-store"
+    resp.set_cookie(
+        key="access_token",
+        value=access,
+        httponly=True,
+        secure=True,
+        samesite="Lax",
+        max_age=int(os.getenv("ACCESS_MIN")) * 60,
+        path="/",
+    )
+    return resp
 
 
 @app.post("/admin/invitations", status_code=201)
@@ -192,18 +211,20 @@ def accept_invitation(body: InvitationAcceptIn, db: Session = Depends(get_db)):
 
 
 @app.get("/oauth/github/start")
-def github_start(invitation_token: str, flow: str):
+def github_start(flow: str, invitation_token: Optional[str] = None):
+    if flow == "register" and not invitation_token:
+        raise HTTPException(
+            status_code=400, detail="invitation_token is required for register"
+        )
+
     code_verifier, code_challenge = gen_pkce()
     state = secrets.token_urlsafe(16)
 
-    save_oauth_tx(
-        state,
-        {
-            "code_verifier": code_verifier,
-            "invitation_token": invitation_token,
-            "flow": flow,
-        },
-    )
+    data = {"code_verifier": code_verifier, "flow": flow}
+    if invitation_token:
+        data["invitation_token"] = invitation_token
+
+    save_oauth_tx(state, data)
 
     params = {
         "client_id": CLIENT_ID,

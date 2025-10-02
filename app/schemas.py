@@ -19,11 +19,6 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
-class TokenOut(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
