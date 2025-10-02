@@ -83,16 +83,6 @@ def _require_base_url() -> str:
     return base_url.rstrip("/")
 
 
-def _get_current_admin_email() -> str:
-    email = os.getenv("ADMIN_EMAIL")
-    if not email:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Admin authentication is not configured",
-        )
-    return email
-
-
 def _get_active_invitation(db: Session, token_h: str) -> Invitation | None:
     inv = db.query(Invitation).filter(Invitation.token_hash == token_h).first()
     if not inv:
@@ -134,6 +124,12 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user:
         _unauth("User not found")
     return user
+
+
+def require_admin(user: User = Depends(get_current_user)) -> str:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="The user is not an admin")
+    return user.email
 
 
 @app.post("/users", response_model=UserOut, status_code=201)
@@ -184,7 +180,7 @@ def create_invitation(
     payload: InviteIn,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_admin_email: str = Depends(_get_current_admin_email),
+    current_admin_email: str = Depends(require_admin),
 ):
     raw_token = generate_raw_token(32)
     token_hash = hash_token(raw_token)
