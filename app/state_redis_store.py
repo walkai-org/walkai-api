@@ -1,6 +1,5 @@
 import json
 import os
-from typing import Optional
 
 import redis
 
@@ -12,7 +11,7 @@ def save_oauth_tx(state: str, data: dict):
     r.setex(f"oauth:{state}", TTL, json.dumps(data))
 
 
-def load_oauth_tx(state: str) -> Optional[dict]:
+def load_oauth_tx(state: str) -> dict | None:
     raw = r.get(f"oauth:{state}")
     if not raw:
         return None

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import secrets
+from collections.abc import Generator
 from datetime import datetime, timedelta
-from typing import Generator, Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -69,7 +69,7 @@ app.add_middleware(
 )
 
 
-def get_db() -> Generator[Session, None, None]:
+def get_db() -> Generator[Session]:
     yield from get_session()
 
 
@@ -237,7 +237,7 @@ def accept_invitation(body: InvitationAcceptIn, db: Session = Depends(get_db)):
 
 
 @app.get("/oauth/github/start")
-def github_start(flow: str, invitation_token: Optional[str] = None):
+def github_start(flow: str, invitation_token: str | None = None):
     if flow == "register" and not invitation_token:
         raise HTTPException(
             status_code=400, detail="invitation_token is required for register"
