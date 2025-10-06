@@ -1,12 +1,10 @@
-from __future__ import annotations
-
-from collections.abc import Iterator
+from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from .config import get_settings
+from app.core.config import get_settings
 
 settings = get_settings()
 
@@ -25,7 +23,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
-def get_session() -> Iterator[Session]:
+def get_db() -> Generator[Session]:
     session = SessionLocal()
     try:
         yield session
@@ -43,3 +41,7 @@ def ping_database() -> bool:
         return True
     except SQLAlchemyError:
         return False
+
+
+class Base(DeclarativeBase):
+    pass

@@ -1,9 +1,6 @@
-from __future__ import annotations
-
 import os
 import secrets
-from collections.abc import Generator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -13,11 +10,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from .config import get_settings
-from .database import engine, get_session, ping_database
-from .email_sender import send_invitation_via_acs_smtp
-from .models import Base, Invitation, SocialIdentity, User
-from .schemas import (
+from app.core.config import get_settings
+from app.core.security import (
+    create_access,
+    gen_pkce,
+    generate_raw_token,
+    hash_password,
+    hash_token,
+    verify_password,
+)
+from app.db.database import engine, get_db, ping_database
+from app.models.users import Base, Invitation, SocialIdentity, User
+from app.schemas.users import (
     InvitationAcceptIn,
     InvitationVerifyIn,
     InvitationVerifyOut,
@@ -26,15 +30,8 @@ from .schemas import (
     UserCreate,
     UserOut,
 )
-from .security import (
-    create_access,
-    gen_pkce,
-    generate_raw_token,
-    hash_password,
-    hash_token,
-    verify_password,
-)
-from .state_redis_store import load_oauth_tx, save_oauth_tx
+from app.services.email_service import send_invitation_via_acs_smtp
+from app.services.redis_service import load_oauth_tx, save_oauth_tx
 
 settings = get_settings()
 INVITE_TTL_HOURS = 48
@@ -69,10 +66,6 @@ app.add_middleware(
 )
 
 
-def get_db() -> Generator[Session]:
-    yield from get_session()
-
-
 def _require_base_url() -> str:
     base_url = os.getenv("INVITE_BASE_URL")
     if not base_url:
@@ -87,7 +80,7 @@ def _get_active_invitation(db: Session, token_h: str) -> Invitation | None:
     inv = db.query(Invitation).filter(Invitation.token_hash == token_h).first()
     if not inv:
         return None
-    now = datetime.utcnow()
+    now = datetime.now(tz=UTC)
     if inv.used_at is not None or inv.expires_at < now:
         return None
     return inv
