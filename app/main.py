@@ -1,4 +1,3 @@
-import os
 import secrets
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
@@ -41,14 +40,14 @@ GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
 GITHUB_USER = "https://api.github.com/user"
 GITHUB_EMAILS = "https://api.github.com/user/emails"
 
-CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
-CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
-REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI")
-FRONTEND_HOME = os.getenv("FRONTEND_HOME")
+CLIENT_ID = settings.github_client_id
+CLIENT_SECRET = settings.github_client_secret
+REDIRECT_URI = settings.github_redirect_uri
+FRONTEND_HOME = settings.frontend_home
 SCOPES = "read:user user:email"
 
-JWT_SECRET = os.getenv("JWT_SECRET")
-JWT_ALGO = os.getenv("JWT_ALGO")
+JWT_SECRET = settings.jwt_secret
+JWT_ALGO = settings.jwt_algo
 
 Base.metadata.create_all(bind=engine)
 
@@ -67,7 +66,7 @@ app.add_middleware(
 
 
 def _require_base_url() -> str:
-    base_url = os.getenv("INVITE_BASE_URL")
+    base_url = settings.invite_base_url
     if not base_url:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -93,29 +92,34 @@ def _pick_verified_primary_email(emails: list[dict]) -> str | None:
     return None
 
 
-def _unauth(detail="Not authenticated"):
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
-
-
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     token = request.cookies.get("access_token")
     if not token:
-        _unauth()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
 
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
     except jwt.ExpiredSignatureError:
-        _unauth("Session expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
+        )
     except jwt.InvalidTokenError:
-        _unauth("Invalid token")
-
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+        )
     sub = payload.get("sub")
     if not sub:
-        _unauth("Invalid token payload")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload"
+        )
 
     user = db.query(User).filter(User.id == int(sub)).first()
     if not user:
-        _unauth("User not found")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
+        )
     return user
 
 
@@ -161,8 +165,8 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
         value=access,
         httponly=True,
         secure=False,
-        samesite="Lax",
-        max_age=int(os.getenv("ACCESS_MIN")) * 60,
+        samesite="lax",
+        max_age=settings.access_min * 60,
         path="/",
     )
     return resp
@@ -354,7 +358,7 @@ def github_callback(code: str, state: str, db: Session = Depends(get_db)):
         httponly=True,
         secure=False,
         samesite="Lax",
-        max_age=int(os.getenv("ACCESS_MIN")) * 60,
+        max_age=settings.access_min * 60,
         path="/",
     )
     return resp
@@ -384,6 +388,5 @@ def health_check():
     database_status = "ok" if ping_database() else "error"
     return {
         "status": "ok",
-        "environment": settings.environment,
         "database": database_status,
     }

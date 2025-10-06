@@ -1,15 +1,19 @@
-import os
 import smtplib
 from email.message import EmailMessage
 
-HOST = os.getenv("ACS_SMTP_HOST", "smtp.azurecomm.net")
-PORT = int(os.getenv("ACS_SMTP_PORT", "587"))
-USER = os.getenv("ACS_SMTP_USERNAME")
-PWD = os.getenv("ACS_SMTP_PASSWORD")
-MAIL_FROM = os.getenv("MAIL_FROM")
+from app.core.config import get_settings
+
+settings = get_settings()
+
+HOST = settings.acs_smtp_host
+PORT = settings.acs_smtp_port
+USER = settings.acs_smtp_username
+PWD = settings.acs_smtp_password
+MAIL_FROM = settings.mail_from
 
 
 def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
+    print(HOST, PORT, USER, PWD, MAIL_FROM)
     msg = EmailMessage()
     msg["Subject"] = "Invitation to walk:ai"
     msg["From"] = MAIL_FROM

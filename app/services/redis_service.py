@@ -1,9 +1,11 @@
 import json
-import os
 
 import redis
 
-r = redis.from_url(os.getenv("REDIS_URL"))
+from app.core.config import get_settings
+
+settings = get_settings()
+r = redis.from_url(settings.redis_url)
 TTL = 600
 
 

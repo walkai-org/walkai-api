@@ -6,14 +6,14 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 from argon2 import PasswordHasher
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.core.config import get_settings
 
 ph = PasswordHasher(time_cost=3, memory_cost=64 * 1024, parallelism=2)
-JWT_SECRET = os.getenv("JWT_SECRET")
-JWT_ALGO = os.getenv("JWT_ALGO")
-ACCESS_MIN = int(os.getenv("ACCESS_MIN"))
+settings = get_settings()
+JWT_SECRET = settings.jwt_secret
+JWT_ALGO = settings.jwt_algo
+ACCESS_MIN = settings.access_min
 
 
 def generate_raw_token(nbytes: int = 32) -> str:

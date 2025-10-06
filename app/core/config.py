@@ -1,40 +1,59 @@
-import os
-from dataclasses import dataclass
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from pathlib import Path
 
-from dotenv import load_dotenv
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-load_dotenv()
 
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-@dataclass(frozen=True)
-class Settings:
-    environment: str
-    sqlite_path: Path
+    app_env: str = Field(default="development", alias="APP_ENV")
+    sqlite_db_path: Path | None = Field(default=None, alias="SQLITE_DB_PATH")
+
+    jwt_secret: str = Field(alias="JWT_SECRET")
+    jwt_algo: str = Field(alias="JWT_ALGO")
+    access_min: int = Field(alias="ACCESS_MIN", ge=1)
+
+    github_client_id: str | None = Field(default=None, alias="GITHUB_CLIENT_ID")
+    github_client_secret: str | None = Field(default=None, alias="GITHUB_CLIENT_SECRET")
+    github_redirect_uri: str | None = Field(default=None, alias="GITHUB_REDIRECT_URI")
+    frontend_home: str | None = Field(default=None, alias="FRONTEND_HOME")
+    invite_base_url: str | None = Field(default=None, alias="INVITE_BASE_URL")
+
+    redis_url: str = Field(alias="REDIS_URL")
+
+    acs_smtp_host: str = Field(default="smtp.azurecomm.net", alias="ACS_SMTP_HOST")
+    acs_smtp_port: int = Field(default=587, alias="ACS_SMTP_PORT")
+    acs_smtp_username: str | None = Field(default=None, alias="ACS_SMTP_USERNAME")
+    acs_smtp_password: str | None = Field(default=None, alias="ACS_SMTP_PASSWORD")
+    mail_from: str | None = Field(default=None, alias="MAIL_FROM")
+
+    @cached_property
+    def sqlite_path(self) -> Path:
+        default_name = (
+            "walkai_prod.db" if self.app_env == "production" else "walkai_dev.db"
+        )
+        candidate = self.sqlite_db_path or Path(f"data/{default_name}")
+
+        if not candidate.is_absolute():
+            project_root = Path(__file__).resolve().parent.parent.parent
+            resolved = project_root / candidate
+        else:
+            resolved = candidate
+
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
 
     @property
     def database_path(self) -> str:
-        """Return the resolved sqlite database path as a string."""
         return str(self.sqlite_path)
-
-
-def _resolve_sqlite_path(environment: str) -> Path:
-    default_name = "walkai_prod.db" if environment == "production" else "walkai_dev.db"
-    relative_path = Path(os.getenv("SQLITE_DB_PATH", f"data/{default_name}"))
-
-    if not relative_path.is_absolute():
-        project_root = Path(__file__).resolve().parent.parent
-        sqlite_path = project_root / relative_path
-    else:
-        sqlite_path = relative_path
-
-    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite_path
 
 
 @lru_cache
 def get_settings() -> Settings:
-    environment = os.getenv("APP_ENV", "development")
-    sqlite_path = _resolve_sqlite_path(environment)
-    return Settings(environment=environment, sqlite_path=sqlite_path)
+    return Settings()  # type: ignore
