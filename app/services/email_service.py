@@ -13,7 +13,6 @@ MAIL_FROM = settings.mail_from
 
 
 def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
-    print(HOST, PORT, USER, PWD, MAIL_FROM)
     msg = EmailMessage()
     msg["Subject"] = "Invitation to walk:ai"
     msg["From"] = MAIL_FROM
@@ -28,7 +27,6 @@ def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
             <p>If you did not expect this email, you can safely ignore it.</p>""",
         subtype="html",
     )
-
     with smtplib.SMTP(HOST, PORT, timeout=20) as smtp:
         smtp.ehlo()
         smtp.starttls()

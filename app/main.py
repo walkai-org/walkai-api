@@ -1,4 +1,6 @@
+import logging
 import secrets
+import sys
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -31,6 +33,14 @@ from app.schemas.users import (
 )
 from app.services.email_service import send_invitation_via_acs_smtp
 from app.services.redis_service import load_oauth_tx, save_oauth_tx
+
+root = logging.getLogger()
+if not root.handlers:  # don't double-add in reloads
+    h = logging.StreamHandler(sys.stdout)
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(h)
+
+root.setLevel(logging.INFO)
 
 settings = get_settings()
 INVITE_TTL_HOURS = 48
@@ -79,7 +89,7 @@ def _get_active_invitation(db: Session, token_h: str) -> Invitation | None:
     inv = db.query(Invitation).filter(Invitation.token_hash == token_h).first()
     if not inv:
         return None
-    now = datetime.now(tz=UTC)
+    now = datetime.now()
     if inv.used_at is not None or inv.expires_at < now:
         return None
     return inv
