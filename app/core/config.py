@@ -3,7 +3,10 @@ from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import ssl
 
+SMTP_CTX: ssl.SSLContext = ssl.create_default_context()
+SMTP_CTX.minimum_version = ssl.TLSVersion.TLSv1_2  # optional, sane floor
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -57,3 +60,7 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore
+
+
+def get_smtp_ctx() -> ssl.SSLContext:
+    return SMTP_CTX

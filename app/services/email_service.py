@@ -1,7 +1,8 @@
 import smtplib
 from email.message import EmailMessage
-
-from app.core.config import get_settings
+import sys
+import ssl
+from app.core.config import get_settings, get_smtp_ctx
 
 settings = get_settings()
 
@@ -13,7 +14,6 @@ MAIL_FROM = settings.mail_from
 
 
 def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
-    print(HOST, PORT, USER, PWD, MAIL_FROM)
     msg = EmailMessage()
     msg["Subject"] = "Invitation to walk:ai"
     msg["From"] = MAIL_FROM
@@ -28,10 +28,10 @@ def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
             <p>If you did not expect this email, you can safely ignore it.</p>""",
         subtype="html",
     )
-
+    ctx = get_smtp_ctx()
     with smtplib.SMTP(HOST, PORT, timeout=20) as smtp:
         smtp.ehlo()
-        smtp.starttls()
+        smtp.starttls(context=ctx)
         smtp.ehlo()
         smtp.login(USER, PWD)
         smtp.send_message(msg)
