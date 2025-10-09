@@ -1,17 +1,20 @@
 import logging
 import secrets
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
-import jwt
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.api import jobs
+from app.api.deps import get_current_user, require_admin
 from app.core.config import get_settings
+from app.core.database import engine, get_db, ping_database
+from app.core.k8s import lifespan
 from app.core.security import (
     create_access,
     gen_pkce,
@@ -20,7 +23,6 @@ from app.core.security import (
     hash_token,
     verify_password,
 )
-from app.db.database import engine, get_db, ping_database
 from app.models.users import Base, Invitation, SocialIdentity, User
 from app.schemas.users import (
     InvitationAcceptIn,
@@ -61,7 +63,7 @@ JWT_ALGO = settings.jwt_algo
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="walk:ai API", version="0.1.0")
+app = FastAPI(title="walk:ai API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,6 +75,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(jobs.router)
 
 
 def _require_base_url() -> str:
@@ -100,43 +104,6 @@ def _pick_verified_primary_email(emails: list[dict]) -> str | None:
         if e.get("primary") and e.get("verified"):
             return e["email"].strip().lower()
     return None
-
-
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    token = request.cookies.get("access_token")
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
-        )
-
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
-        )
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
-        )
-    sub = payload.get("sub")
-    if not sub:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload"
-        )
-
-    user = db.query(User).filter(User.id == int(sub)).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
-        )
-    return user
-
-
-def require_admin(user: User = Depends(get_current_user)) -> str:
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="The user is not an admin")
-    return user.email
 
 
 @app.post("/users", response_model=UserOut, status_code=201)
