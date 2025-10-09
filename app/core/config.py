@@ -1,7 +1,7 @@
 from functools import cached_property, lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AnyUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     acs_smtp_username: str | None = Field(default=None, alias="ACS_SMTP_USERNAME")
     acs_smtp_password: str | None = Field(default=None, alias="ACS_SMTP_PASSWORD")
     mail_from: str | None = Field(default=None, alias="MAIL_FROM")
+
+    cluster_token: str = Field(alias="CLUSTER_TOKEN")
+    cluster_url: str = Field(alias="CLUSTER_URL")
 
     @cached_property
     def sqlite_path(self) -> Path:
