@@ -2,7 +2,7 @@ from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass, Session, sessionmaker
 
 from app.core.config import get_settings
 
@@ -43,5 +43,5 @@ def ping_database() -> bool:
         return False
 
 
-class Base(DeclarativeBase):
+class Base(MappedAsDataclass, DeclarativeBase):
     pass

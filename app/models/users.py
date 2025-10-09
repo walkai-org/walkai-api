@@ -1,13 +1,10 @@
-from datetime import datetime
+import datetime
 
 from sqlalchemy import (
-    Boolean,
-    DateTime,
-    Integer,
-    String,
+    ForeignKey,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -15,35 +12,39 @@ from app.core.database import Base
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    email: Mapped[str] = mapped_column(String, unique=True, index=True)
-    password_hash: Mapped[str | None] = mapped_column(String)
-    role: Mapped[str] = mapped_column(String, default="admin")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    email: Mapped[str] = mapped_column(unique=True)
+    password_hash: Mapped[str | None] = mapped_column(default=None, repr=False)
+    role: Mapped[str] = mapped_column(default="admin")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        default=lambda: datetime.datetime.now(datetime.UTC), init=False
+    )
+    jobs: Mapped[list["Job"]] = relationship(back_populates="created_by", init=False)  # type: ignore  # noqa: F821
+    social_identities: Mapped[list["SocialIdentity"]] = relationship(
+        back_populates="user",
+        init=False,
     )
 
 
 class Invitation(Base):
     __tablename__ = "user_invitations"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    token_hash: Mapped[str] = mapped_column(
-        String, nullable=False, unique=True, index=True
-    )
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    invited_by: Mapped[str | None] = mapped_column(String, nullable=True)
-    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    email: Mapped[str] = mapped_column(index=True)
+    token_hash: Mapped[str] = mapped_column(unique=True, repr=False)
+    expires_at: Mapped[datetime.datetime]
+    invited_by: Mapped[str | None] = mapped_column(default=None)
+    used_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
 
 
 class SocialIdentity(Base):
     __tablename__ = "social_identities"
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
-    provider: Mapped[str] = mapped_column(String, index=True, nullable=False)
-    provider_user_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
-    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user: Mapped[User] = relationship(back_populates="social_identities", init=False)
+    provider: Mapped[str] = mapped_column(index=True)
+    provider_user_id: Mapped[str] = mapped_column(index=True)
+    email_verified: Mapped[bool] = mapped_column(default=False)
 
     __table_args__ = (
         UniqueConstraint("provider", "provider_user_id", name="uq_provider_sub"),
