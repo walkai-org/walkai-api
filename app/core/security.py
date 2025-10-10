@@ -10,10 +10,6 @@ from argon2 import PasswordHasher
 from app.core.config import get_settings
 
 ph = PasswordHasher(time_cost=3, memory_cost=64 * 1024, parallelism=2)
-settings = get_settings()
-JWT_SECRET = settings.jwt_secret
-JWT_ALGO = settings.jwt_algo
-ACCESS_MIN = settings.access_min
 
 
 def generate_raw_token(nbytes: int = 32) -> str:
@@ -36,6 +32,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_token(sub: str, role: str, ttl: timedelta) -> str:
+    settings = get_settings()
     now = datetime.now(UTC)
     payload = {
         "sub": sub,
@@ -43,11 +40,12 @@ def create_token(sub: str, role: str, ttl: timedelta) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + ttl).timestamp()),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algo)
 
 
 def create_access(sub: str, role: str) -> str:
-    return create_token(sub, role, timedelta(minutes=ACCESS_MIN))
+    settings = get_settings()
+    return create_token(sub, role, timedelta(minutes=settings.access_min))
 
 
 def gen_pkce():

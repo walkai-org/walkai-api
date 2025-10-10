@@ -1,8 +1,10 @@
 import datetime
 
 from sqlalchemy import (
+    DateTime,
     ForeignKey,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,7 +19,10 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(default=None, repr=False)
     role: Mapped[str] = mapped_column(default="admin")
     created_at: Mapped[datetime.datetime] = mapped_column(
-        default=lambda: datetime.datetime.now(datetime.UTC), init=False
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        server_default=func.now(),
+        init=False,
     )
     jobs: Mapped[list["Job"]] = relationship(back_populates="created_by", init=False)  # type: ignore  # noqa: F821
     social_identities: Mapped[list["SocialIdentity"]] = relationship(
@@ -64,11 +69,13 @@ class PersonalAccessToken(Base):
     user: Mapped[User] = relationship(
         back_populates="personal_access_tokens", init=False
     )
-    name: Mapped[str | None] = mapped_column(default=None)
     token_hash: Mapped[str] = mapped_column(unique=True, index=True, repr=False)
     token_prefix: Mapped[str] = mapped_column(index=True)
+    name: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        default=lambda: datetime.datetime.now(datetime.UTC),
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        server_default=func.now(),
         init=False,
     )
     last_used_at: Mapped[datetime.datetime | None] = mapped_column(default=None)

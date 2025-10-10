@@ -1,7 +1,7 @@
 import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, Enum, ForeignKey
+from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -52,7 +52,9 @@ class Job(Base):
     image: Mapped[str]
     gpu_profile: Mapped[GPUProfile] = mapped_column(Enum(GPUProfile))
     submitted_at: Mapped[datetime.datetime] = mapped_column(
-        default=lambda: datetime.datetime.now(datetime.UTC),
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        server_default=func.now(),
         init=False,
     )
 

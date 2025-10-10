@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PersonalAccessTokenCreate(BaseModel):
@@ -18,8 +18,9 @@ class PersonalAccessTokenOut(BaseModel):
     created_at: datetime
     last_used_at: datetime | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(
+        from_attributes=True,
+    )
 
 
 class PersonalAccessTokenCreated(PersonalAccessTokenOut):
