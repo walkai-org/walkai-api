@@ -24,6 +24,11 @@ class User(Base):
         back_populates="user",
         init=False,
     )
+    personal_access_tokens: Mapped[list["PersonalAccessToken"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        init=False,
+    )
 
 
 class Invitation(Base):
@@ -49,3 +54,21 @@ class SocialIdentity(Base):
     __table_args__ = (
         UniqueConstraint("provider", "provider_user_id", name="uq_provider_sub"),
     )
+
+
+class PersonalAccessToken(Base):
+    __tablename__ = "personal_access_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user: Mapped[User] = relationship(
+        back_populates="personal_access_tokens", init=False
+    )
+    name: Mapped[str | None] = mapped_column(default=None)
+    token_hash: Mapped[str] = mapped_column(unique=True, index=True, repr=False)
+    token_prefix: Mapped[str] = mapped_column(index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        init=False,
+    )
+    last_used_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
