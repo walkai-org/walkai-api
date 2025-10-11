@@ -1,7 +1,7 @@
 import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, ForeignKey
+from sqlalchemy import CheckConstraint, Enum, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -26,13 +26,14 @@ class RunStatus(StrEnum):
 
 class Volume(Base):
     __tablename__ = "volumes"
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
     pvc_name: Mapped[str]
     size: Mapped[int]
+    key_prefix: Mapped[str | None] = mapped_column(default=None)
     is_input: Mapped[bool] = mapped_column(default=False)
-    state: Mapped[VolumeState] = mapped_column(default=VolumeState.pvc)
-
-    key_prefix: Mapped[str | None]
+    state: Mapped[VolumeState] = mapped_column(
+        Enum(VolumeState), default=VolumeState.pvc
+    )
 
     # TODO:
     # Optional: computed helpers (in Python model, not persisted)
@@ -47,41 +48,49 @@ class Volume(Base):
 
 class Job(Base):
     __tablename__ = "jobs"
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
     image: Mapped[str]
-    gpu_profile: Mapped[GPUProfile]
+    gpu_profile: Mapped[GPUProfile] = mapped_column(Enum(GPUProfile))
     submitted_at: Mapped[datetime.datetime] = mapped_column(
-        default=datetime.datetime.now(datetime.UTC)
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        init=False,
     )
 
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_by: Mapped[User] = relationship(backref="jobs")
+    created_by: Mapped[User] = relationship(back_populates="jobs", init=False)
 
     k8s_job_name: Mapped[str]
 
-    runs: Mapped[list["JobRun"]] = relationship("JobRun", back_populates="job")
+    runs: Mapped[list["JobRun"]] = relationship(
+        "JobRun", back_populates="job", init=False
+    )
 
 
 class JobRun(Base):
     __tablename__ = "job_runs"
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
 
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
-    job: Mapped[Job] = relationship(Job, back_populates="runs")
+    job: Mapped[Job] = relationship(Job, back_populates="runs", init=False)
 
-    status: Mapped[RunStatus]
+    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus))
     k8s_pod_name: Mapped[str]
 
-    started_at: Mapped[datetime.datetime | None]
-    finished_at: Mapped[datetime.datetime | None]
-
-    exit_code: Mapped[int | None]
-
-    input_volume_id: Mapped[int | None] = mapped_column(ForeignKey("volumes.id"))
-    input_volume: Mapped[Volume | None] = relationship(foreign_keys=[input_volume_id])
-
     output_volume_id: Mapped[int] = mapped_column(ForeignKey("volumes.id"))
-    output_volume: Mapped[Volume] = relationship(foreign_keys=[output_volume_id])
+    output_volume: Mapped[Volume] = relationship(
+        foreign_keys=[output_volume_id], init=False
+    )
+
+    started_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
+    exit_code: Mapped[int | None] = mapped_column(default=None)
+
+    input_volume_id: Mapped[int | None] = mapped_column(
+        ForeignKey("volumes.id"), default=None
+    )
+    input_volume: Mapped[Volume | None] = relationship(
+        foreign_keys=[input_volume_id], init=False
+    )
 
     __table_args__ = (
         CheckConstraint(

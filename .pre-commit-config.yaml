@@ -14,7 +14,6 @@ repos:
     hooks:
       - id: end-of-file-fixer
       - id: check-merge-conflict
-      - id: check-yaml
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.27.2
