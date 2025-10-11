@@ -5,11 +5,11 @@ from pydantic import BaseModel
 
 
 class GPUProfile(StrEnum):
-    g1_10 = "1g.10"
-    g2_20 = "2g.20"
-    g3_40 = "3g.40"
-    g4_40 = "4g.40"
-    g7_79 = "7g.79"
+    g1_10 = "1g.10gb"
+    g2_20 = "2g.20gb"
+    g3_40 = "3g.40gb"
+    g4_40 = "4g.40gb"
+    g7_79 = "7g.79gb"
 
 
 class JobCreate(BaseModel):

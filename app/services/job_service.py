@@ -38,7 +38,7 @@ def _render_job_manifest(
     }
 
     if gpu:
-        resource_key = f"nvidia.com/mig-{gpu}gb"
+        resource_key = f"nvidia.com/mig-{gpu}"
         container["resources"] = {"limits": {resource_key: 1}}
 
     volumes: list[dict[str, object]] = [
