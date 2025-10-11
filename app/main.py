@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.api import jobs
+from app.api import jobs, tokens
 from app.api.deps import get_current_user, require_admin
 from app.core.config import get_settings
 from app.core.database import engine, get_db, ping_database
@@ -77,6 +77,7 @@ app.add_middleware(
 )
 
 app.include_router(jobs.router)
+app.include_router(tokens.router)
 
 
 def _require_base_url() -> str:
