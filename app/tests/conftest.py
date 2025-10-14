@@ -1,56 +1,66 @@
-import os
-import tempfile
-from pathlib import Path
+from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import StaticPool, create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.database import Base, get_db
 from app.core.security import create_access
+from app.main import app
 from app.models.users import User
 
-temp_dir = Path(tempfile.mkdtemp(prefix="walkai-test-"))
-os.environ["APP_ENV"] = "test"
-os.environ["SQLITE_DB_PATH"] = str(temp_dir / "test.db")
-os.environ["JWT_SECRET"] = "test-jwt-secret"
-os.environ["JWT_ALGO"] = "HS256"
-os.environ["ACCESS_MIN"] = "15"
-os.environ["REDIS_URL"] = "redis://localhost:6379/0"
-os.environ["CLUSTER_TOKEN"] = "test-cluster-token"
-os.environ["CLUSTER_URL"] = "https://example.com"
 
-from app.core import config as app_config  # noqa: E402
-
-app_config.get_settings.cache_clear()
-
-from app.core.database import Base, SessionLocal, engine  # noqa: E402
-from app.main import app  # noqa: E402
-
-
-@pytest.fixture(autouse=True)
-def reset_database():
-    Base.metadata.drop_all(bind=engine)
+@pytest.fixture(scope="session")
+def engine():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        future=True,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
+    yield engine
+    engine.dispose()
 
 
 @pytest.fixture
-def db_session():
-    session = SessionLocal()
+def db_session(engine) -> Generator[Session]:
+    connection = engine.connect()
+    trans = connection.begin()
+
+    TestingSessionLocal = sessionmaker(
+        bind=connection, autoflush=False, expire_on_commit=False, future=True
+    )
+    session = TestingSessionLocal()
+
     try:
         yield session
     finally:
         session.close()
+        trans.rollback()  # undo everything this test did
+        connection.close()
 
 
 @pytest.fixture
-def client():
+def client(db_session) -> Generator[TestClient]:
+    # Override FastAPI's get_db to use our testing session
+    def _override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = _override_get_db
     with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
-def test_user(db_session) -> User:
+def test_user(db_session) -> "User":
+    from app.models.users import User
+
     u = User(email="test@example.com", password_hash=None, role="admin")
     db_session.add(u)
     db_session.commit()
