@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     cluster_token: str = Field(alias="CLUSTER_TOKEN")
     cluster_url: str = Field(alias="CLUSTER_URL")
+    namespace: str = Field(default="walkai", alias="JOB_NAMESPACE")
 
     @cached_property
     def sqlite_path(self) -> Path:

@@ -4,9 +4,12 @@ from fastapi import HTTPException
 from kubernetes import client, watch
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.jobs import Job, JobRun, RunStatus, Volume, VolumeState
 from app.models.users import User
 from app.schemas.jobs import JobCreate
+
+settings = get_settings()
 
 
 def _render_persistent_volume_claim(
@@ -66,14 +69,14 @@ def _render_job_manifest(
 def apply_job(batch: client.BatchV1Api, manifest: dict):
     return batch.create_namespaced_job(
         body=manifest,
-        namespace="walkai",
+        namespace=settings.namespace,
     )
 
 
 def apply_pvc(core: client.CoreV1Api, manifest: dict):
     return core.create_namespaced_persistent_volume_claim(
         body=manifest,
-        namespace="walkai",
+        namespace=settings.namespace,
     )
 
 
@@ -127,7 +130,7 @@ def wait_for_first_pod_of_job(
     w = watch.Watch()
     for event in w.stream(
         core.list_namespaced_pod,
-        namespace="walkai",
+        namespace=settings.namespace,
         label_selector=f"job-name={job_name}",
         timeout_seconds=timeout_seconds,
     ):
