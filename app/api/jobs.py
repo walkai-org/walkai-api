@@ -3,6 +3,7 @@ from kubernetes import client
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.k8s import get_batch, get_core
 from app.models.users import User
@@ -25,8 +26,8 @@ def submit_job(
 
 
 @router.get("/", response_model=list[JobOutList])
-def list_jobs(core=Depends(get_core)):
-    ret = core.list_namespaced_pod(namespace="walkai", watch=False)
+def list_jobs(core=Depends(get_core), settings=Depends(get_settings)):
+    ret = core.list_namespaced_pod(namespace=settings.namespace, watch=False)
     res = []
     for i in ret.items:
         res.append(
