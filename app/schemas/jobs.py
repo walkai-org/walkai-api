@@ -23,7 +23,7 @@ class JobRunOut(BaseModel):
     pod: str
 
 
-class JobOutList(BaseModel):
+class PodList(BaseModel):
     name: str
     namespace: str
-    status: Literal["Running", "Pending", "ContainerCreating"]
+    status: Literal["Running", "Pending", "ContainerCreating", "Succeeded"]
