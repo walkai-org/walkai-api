@@ -6,22 +6,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.users import User
-from app.schemas.jobs import GPUProfile
+from app.schemas.jobs import GPUProfile, RunStatus
 
 
 class VolumeState(StrEnum):
     pvc = "pvc"
     stored = "stored"
     deleted = "deleted"
-
-
-class RunStatus(StrEnum):
-    pending = "pending"
-    scheduled = "scheduled"
-    active = "active"
-    succeeded = "succeeded"
-    failed = "failed"
-    cancelled = "cancelled"
 
 
 class Volume(Base):

@@ -2,7 +2,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 from kubernetes import client, watch
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
 from app.models.jobs import Job, JobRun, RunStatus, Volume, VolumeState
@@ -171,3 +172,24 @@ def create_and_run_job(
     job_run = create_job_run(db, job, output_pvc, pod.metadata.name)  # type: ignore
     db.commit()
     return job_run
+
+
+def list_jobs(db: Session) -> list[Job]:
+    stmt = select(Job).options(selectinload(Job.runs)).order_by(Job.submitted_at.desc())
+    result = db.execute(stmt)
+    return result.scalars().unique().all()
+
+
+def get_job(db: Session, job_id: int) -> Job:
+    stmt = (
+        select(Job)
+        .options(
+            selectinload(Job.runs).selectinload(JobRun.output_volume),
+            selectinload(Job.runs).selectinload(JobRun.input_volume),
+        )
+        .where(Job.id == job_id)
+    )
+    result = db.execute(stmt).scalar_one_or_none()
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return result
