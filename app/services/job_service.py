@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -174,7 +175,7 @@ def create_and_run_job(
     return job_run
 
 
-def list_jobs(db: Session) -> list[Job]:
+def list_jobs(db: Session) -> Sequence[Job]:
     stmt = select(Job).options(selectinload(Job.runs)).order_by(Job.submitted_at.desc())
     result = db.execute(stmt)
     return result.scalars().unique().all()
