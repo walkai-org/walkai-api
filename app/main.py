@@ -8,6 +8,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api import jobs, tokens
@@ -122,6 +123,13 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     return user
+
+
+@app.get("/users", response_model=list[UserOut])
+def list_users(db: Session = Depends(get_db)):
+    stmt = select(User).order_by(User.id)
+    result = db.execute(stmt)
+    return result.scalars().unique().all()
 
 
 @app.post("/login")
