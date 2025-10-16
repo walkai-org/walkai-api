@@ -7,7 +7,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.k8s import get_batch, get_core
 from app.models.users import User
-from app.schemas.jobs import JobCreate, JobOutList, JobRunOut
+from app.schemas.jobs import JobCreate, JobDetailOut, JobOut, JobRunOut, PodList
 from app.services import job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -25,16 +25,33 @@ def submit_job(
     return JobRunOut(job_id=job_run.job_id, pod=job_run.k8s_pod_name)
 
 
-@router.get("/", response_model=list[JobOutList])
-def list_jobs(core=Depends(get_core), settings=Depends(get_settings)):
+@router.get("/", response_model=list[JobOut])
+def list_jobs(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return job_service.list_jobs(db)
+
+
+@router.get("/pods", response_model=list[PodList])
+def list_pods(core=Depends(get_core), settings=Depends(get_settings)):
     ret = core.list_namespaced_pod(namespace=settings.namespace, watch=False)
     res = []
     for i in ret.items:
         res.append(
-            JobOutList(
+            PodList(
                 name=i.metadata.name,
                 namespace=i.metadata.namespace,
                 status=i.status.phase,
             )
         )
     return res
+
+
+@router.get("/{job_id}", response_model=JobDetailOut)
+def get_job_detail(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return job_service.get_job(db, job_id)

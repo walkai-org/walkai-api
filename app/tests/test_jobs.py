@@ -54,7 +54,90 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
     assert captured["user"].id == user.id
 
 
-def test_list_jobs_returns_pod_statuses(client):
+def test_list_jobs_returns_jobs(auth_client, db_session):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g2_20, storage=6)
+    job = job_service.create_job(db_session, payload, user.id)
+    output_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, output_volume, "pod-123")
+    db_session.commit()
+
+    response = client.get("/jobs/")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    job_item = data[0]
+    assert job_item["id"] == job.id
+    assert job_item["image"] == payload.image
+    assert job_item["gpu_profile"] == payload.gpu.value
+    assert job_item["created_by_id"] == user.id
+    assert job_item["k8s_job_name"] == job.k8s_job_name
+    assert job_item["submitted_at"]
+    assert job_item["runs"] == [
+        {
+            "id": run.id,
+            "status": run.status.value,
+            "k8s_pod_name": run.k8s_pod_name,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+        }
+    ]
+
+
+def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g3_40, storage=8)
+    job = job_service.create_job(db_session, payload, user.id)
+    output_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, output_volume, "pod-xyz")
+    input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
+    run.input_volume_id = input_volume.id
+    db_session.commit()
+
+    response = client.get(f"/jobs/{job.id}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == job.id
+    assert data["runs"]
+    assert len(data["runs"]) == 1
+    run_data = data["runs"][0]
+    assert run_data["id"] == run.id
+    assert run_data["status"] == run.status.value
+    assert run_data["k8s_pod_name"] == run.k8s_pod_name
+    assert run_data["output_volume"] == {
+        "id": output_volume.id,
+        "pvc_name": output_volume.pvc_name,
+        "size": output_volume.size,
+        "key_prefix": output_volume.key_prefix,
+        "is_input": output_volume.is_input,
+        "state": output_volume.state.value,
+    }
+    assert run_data["input_volume"] == {
+        "id": input_volume.id,
+        "pvc_name": input_volume.pvc_name,
+        "size": input_volume.size,
+        "key_prefix": input_volume.key_prefix,
+        "is_input": input_volume.is_input,
+        "state": input_volume.state.value,
+    }
+
+
+def test_get_job_detail_not_found(auth_client):
+    client, _ = auth_client
+
+    response = client.get("/jobs/9999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job 9999 not found"
+
+
+def test_list_pods_returns_pod_statuses(client):
     fake_core_calls: dict[str, object] = {}
     fake_core = SimpleNamespace(
         list_namespaced_pod=lambda namespace, watch: _fake_list_pods(
@@ -67,7 +150,7 @@ def test_list_jobs_returns_pod_statuses(client):
     app.dependency_overrides[get_settings] = lambda: fake_settings
 
     try:
-        response = client.get("/jobs/")
+        response = client.get("/jobs/pods")
     finally:
         app.dependency_overrides.pop(get_core, None)
         app.dependency_overrides.pop(get_settings, None)
