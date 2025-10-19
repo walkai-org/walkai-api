@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.log
+*.db
+# Environments
+.venv/
+.python-version
+
+# IDEs & tooling
+.idea/
+.vscode/
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# Docker & build
+Dockerfile
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+tests/
+
+# Other
+example.env
+.env.example
+data/

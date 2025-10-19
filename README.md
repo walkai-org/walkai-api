@@ -5,6 +5,7 @@ FastAPI service powering the walk:ai backend APIs.
 ## Getting Started
 
 1. Start a local Redis instance (required for state storage): `docker run -d --rm --name redis -p 6379:6379 redis:latest`
+    - You should use IP redis://172.17.0.1:6379/0 as the URL.
 2. Run a [dev cluster](#create-a-dev-cluster)
 3. Sync dependencies with [uv](https://github.com/astral-sh/uv): `uv sync`
 4. Launch the development server: `uv run uvicorn app.main:app --reload`
