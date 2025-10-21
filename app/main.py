@@ -8,6 +8,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +17,7 @@ from app.api.deps import get_current_user, require_admin
 from app.core.config import get_settings
 from app.core.database import engine, get_db, ping_database
 from app.core.k8s import lifespan
+from app.core.redis import get_redis
 from app.core.security import (
     create_access,
     gen_pkce,
@@ -220,7 +222,11 @@ def accept_invitation(body: InvitationAcceptIn, db: Session = Depends(get_db)):
 
 
 @app.get("/oauth/github/start")
-def github_start(flow: str, invitation_token: str | None = None):
+def github_start(
+    flow: str,
+    invitation_token: str | None = None,
+    redis_client: Redis = Depends(get_redis),
+):
     if flow == "register" and not invitation_token:
         raise HTTPException(
             status_code=400, detail="invitation_token is required for register"
@@ -233,7 +239,7 @@ def github_start(flow: str, invitation_token: str | None = None):
     if invitation_token:
         data["invitation_token"] = invitation_token
 
-    save_oauth_tx(state, data)
+    save_oauth_tx(redis_client, state, data)
 
     params = {
         "client_id": CLIENT_ID,
@@ -248,8 +254,13 @@ def github_start(flow: str, invitation_token: str | None = None):
 
 
 @app.get("/oauth/github/callback")
-def github_callback(code: str, state: str, db: Session = Depends(get_db)):
-    tx = load_oauth_tx(state)
+def github_callback(
+    code: str,
+    state: str,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis),
+):
+    tx = load_oauth_tx(redis_client, state)
     if not tx:
         raise HTTPException(status_code=400, detail="Invalid state")
 
