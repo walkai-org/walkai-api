@@ -10,7 +10,7 @@
 ## Build, Test & Development Commands
 - `uv sync` installs dependencies declared in `pyproject.toml`/`uv.lock`.
 - `uv run uvicorn app.main:app --reload` starts the API with hot reload for local dev.
-- `uv run pytest` executes the test suite; pair with `-k <pattern>` or `-s` when debugging.
+- `uv run pytest` executes the test suite; pair with `-k <pattern>` or `-s` when debugging. Dont use UV_CACHE_DIR.
 - `uv run ruff check` (and `uv run ruff format` before committing) enforces linting and import order.
 
 ## Coding Style & Naming Conventions

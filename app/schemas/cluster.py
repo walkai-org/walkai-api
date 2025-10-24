@@ -16,6 +16,8 @@ class PodStatus(StrEnum):
     running = "Running"
     pending = "Pending"
     container_creating = "ContainerCreating"
+    completed = "Completed"
+    error = "Error"
     succeeded = "Succeeded"
 
 

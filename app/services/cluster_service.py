@@ -1,5 +1,6 @@
 from typing import Final
 
+from fastapi import HTTPException
 from redis import Redis
 
 from app.schemas.cluster import ClusterInsightsIn
@@ -12,6 +13,13 @@ def save_cluster_insights(redis_client: Redis, payload: ClusterInsightsIn) -> No
     Persist the latest cluster snapshot so other endpoints can read it quickly.
     """
     redis_client.set(INSIGHTS_KEY, payload.model_dump_json())
+
+
+def get_insights(redis_client: Redis) -> ClusterInsightsIn:
+    snapshot = load_cluster_insights(redis_client)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Cluster insights not available")
+    return snapshot
 
 
 def load_cluster_insights(redis_client: Redis) -> ClusterInsightsIn | None:
