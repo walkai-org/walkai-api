@@ -1,0 +1,36 @@
+# walkai-api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walkai-api
+  namespace: walkai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: walkai-api
+  template:
+    metadata:
+      labels:
+        app: walkai-api
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:1.0.0
+          args: ["-text=ok", "-listen=:8000"]
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: walkai-api
+  namespace: walkai
+spec:
+  selector:
+    app: walkai-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

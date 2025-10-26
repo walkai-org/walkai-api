@@ -67,13 +67,14 @@ class JobRun(Base):
     job: Mapped[Job] = relationship(Job, back_populates="runs", init=False)
 
     status: Mapped[RunStatus] = mapped_column(Enum(RunStatus))
-    k8s_pod_name: Mapped[str]
+    run_token: Mapped[str]
 
     output_volume_id: Mapped[int] = mapped_column(ForeignKey("volumes.id"))
     output_volume: Mapped[Volume] = relationship(
         foreign_keys=[output_volume_id], init=False
     )
 
+    k8s_pod_name: Mapped[str | None] = mapped_column(default=None)
     started_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
     finished_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
     exit_code: Mapped[int | None] = mapped_column(default=None)

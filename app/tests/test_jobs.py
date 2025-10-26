@@ -61,7 +61,9 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
     output_volume = job_service.create_volume(
         db_session, storage=payload.storage, is_input=False
     )
-    run = job_service.create_job_run(db_session, job, output_volume, "pod-123")
+    run = job_service.create_job_run(db_session, job, output_volume)
+    # Ensure k8s_pod_name is non-null to satisfy schema
+    run.k8s_pod_name = "pod-abc"
     db_session.commit()
 
     response = client.get("/jobs/")
@@ -94,7 +96,9 @@ def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
     output_volume = job_service.create_volume(
         db_session, storage=payload.storage, is_input=False
     )
-    run = job_service.create_job_run(db_session, job, output_volume, "pod-xyz")
+    run = job_service.create_job_run(db_session, job, output_volume)
+    # set pod name after creation to reflect current API
+    run.k8s_pod_name = "pod-xyz"
     input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
     run.input_volume_id = input_volume.id
     db_session.commit()
@@ -199,6 +203,10 @@ def test_render_job_manifest_populates_gpu_limits():
         gpu=GPUProfile.g1_10,
         job_name="job-123",
         output_claim="claim-1",
+        run_id=1,
+        job_id=2,
+        run_token="run-token-abc",
+        api_base_url="https://api.example.com",
     )
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
@@ -214,7 +222,14 @@ def test_render_job_manifest_populates_gpu_limits():
 
 def test_render_job_manifest_skips_gpu_limits_when_empty():
     manifest = job_service._render_job_manifest(
-        image="repo/image:tag", gpu="", job_name="job-789", output_claim="claim-2"
+        image="repo/image:tag",
+        gpu="",
+        job_name="job-789",
+        output_claim="claim-2",
+        run_id=10,
+        job_id=20,
+        run_token="tok",
+        api_base_url="https://api.example.com",
     )
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
@@ -256,11 +271,11 @@ def test_create_job_run_links_job_and_volume(db_session, test_user):
         db_session, storage=payload.storage, is_input=False
     )
 
-    run = job_service.create_job_run(db_session, job, volume, "pod-run-1")
+    run = job_service.create_job_run(db_session, job, volume)
 
     assert run.job_id == job.id
     assert run.output_volume_id == volume.id
-    assert run.k8s_pod_name == "pod-run-1"
+    assert run.k8s_pod_name is None
     assert run.status == RunStatus.pending
 
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from kubernetes import client
 from sqlalchemy.orm import Session
 
@@ -6,6 +6,8 @@ from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.k8s import get_batch, get_core
+from app.core.s3 import presign_put_url
+from app.models.jobs import Job, JobRun
 from app.models.users import User
 from app.schemas.jobs import JobCreate, JobDetailOut, JobOut, JobRunOut, PodList
 from app.services import job_service
@@ -55,3 +57,26 @@ def get_job_detail(
     _: User = Depends(get_current_user),
 ):
     return job_service.get_job(db, job_id)
+
+
+@router.get("/{job_id}/runs/{run_id}/presign")
+def presign_output_object(
+    job_id: int,
+    run_id: int,
+    path: str = Query(..., description="Ruta relativa dentro de /opt/output"),
+    run_token: str = Header(..., alias="X-Run-Token"),
+    db: Session = Depends(get_db),
+):
+    run = db.query(JobRun).filter(JobRun.id == run_id, JobRun.job_id == job_id).first()
+    if not run or run.run_token != run_token:
+        raise HTTPException(status_code=401, detail="Invalid run token")
+
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    s3_prefix = f"users/{job.created_by_id}/jobs/{job_id}/{run_id}/outputs"
+
+    key = f"{s3_prefix.rstrip('/')}/{path.lstrip('/')}"
+    url = presign_put_url(key)
+    return {"url": url}

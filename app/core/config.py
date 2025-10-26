@@ -1,5 +1,4 @@
-from functools import cached_property, lru_cache
-from pathlib import Path
+from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -13,7 +12,6 @@ class Settings(BaseSettings):
     )
 
     app_env: str = Field(default="development", alias="APP_ENV")
-    sqlite_db_path: Path | None = Field(default=None, alias="SQLITE_DB_PATH")
 
     jwt_secret: str = Field(alias="JWT_SECRET")
     jwt_algo: str = Field(alias="JWT_ALGO")
@@ -36,26 +34,14 @@ class Settings(BaseSettings):
     cluster_token: str = Field(alias="CLUSTER_TOKEN")
     cluster_url: str = Field(alias="CLUSTER_URL")
     namespace: str = Field(default="walkai", alias="JOB_NAMESPACE")
+    api_base_url: str = Field(alias="API_BASE_URL")
 
-    @cached_property
-    def sqlite_path(self) -> Path:
-        default_name = (
-            "walkai_prod.db" if self.app_env == "production" else "walkai_dev.db"
-        )
-        candidate = self.sqlite_db_path or Path(f"data/{default_name}")
+    aws_access_key_id: str = Field(alias="AWS_ACCES_KEY_ID")
+    aws_secret_access_key: str = Field(alias="AWS_SECRET_ACCESS_KEY")
+    aws_region: str = Field(alias="AWS_REGION")
+    aws_s3_bucket: str = Field(alias="AWS_S3_BUCKET")
 
-        if not candidate.is_absolute():
-            project_root = Path(__file__).resolve().parent.parent.parent
-            resolved = project_root / candidate
-        else:
-            resolved = candidate
-
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        return resolved
-
-    @property
-    def database_path(self) -> str:
-        return str(self.sqlite_path)
+    database_url: str = Field(alias="DATABASE_URL")
 
 
 @lru_cache
