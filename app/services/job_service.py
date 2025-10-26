@@ -155,7 +155,11 @@ def _render_job_manifest(
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {"name": job_name},
-        "spec": {"backoffLimit": 0, "template": template},
+        "spec": {
+            "backoffLimit": 0,
+            "ttlSecondsAfterFinished": 0,
+            "template": template,
+        },
     }
 
     return manifest

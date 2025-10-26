@@ -61,7 +61,7 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
     output_volume = job_service.create_volume(
         db_session, storage=payload.storage, is_input=False
     )
-    run = job_service.create_job_run(db_session, job, output_volume, "pod-123")
+    run = job_service.create_job_run(db_session, job, output_volume)
     db_session.commit()
 
     response = client.get("/jobs/")

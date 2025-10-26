@@ -8,22 +8,22 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
-
-def _build_connection_url() -> str:
-    sqlite_path = settings.sqlite_path
-    return f"sqlite:///{sqlite_path.as_posix()}"
-
+CONNECTION_URL = settings.database_url
 
 engine = create_engine(
-    _build_connection_url(),
-    connect_args={"check_same_thread": False},
+    CONNECTION_URL,
     pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+    pool_recycle=1800,
+    pool_timeout=30,
+    connect_args={"connect_timeout": 5},
 )
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
-def get_db() -> Generator[Session]:
+def get_db() -> Generator[Session, None, None]:
     session = SessionLocal()
     try:
         yield session
