@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     cluster_url: str = Field(alias="CLUSTER_URL")
     namespace: str = Field(default="walkai", alias="JOB_NAMESPACE")
 
+    api_base_url: str = Field(alias="API_BASE_URL")
+    aws_access_key_id: str = Field(alias="AWS_ACCES_KEY_ID")
+    aws_secret_access_key: str = Field(alias="AWS_SECRET_ACCESS_KEY")
+    aws_region: str = Field(alias="AWS_REGION")
+    aws_s3_bucket: str = Field(alias="AWS_S3_BUCKET")
+
     @cached_property
     def sqlite_path(self) -> Path:
         default_name = (

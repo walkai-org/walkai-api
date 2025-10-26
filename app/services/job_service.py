@@ -30,13 +30,21 @@ def _render_persistent_volume_claim(
 
 
 def _render_job_manifest(
-    *, image: str, gpu: str, job_name: str, output_claim: str
+    *,
+    image: str,
+    gpu: str,
+    job_name: str,
+    output_claim: str,
+    run_id: int,
+    job_id: int,
+    run_token: str,
+    api_base_url: str,
 ) -> dict[str, object]:
     volume_mounts: list[dict[str, object]] = [
         {"name": "output", "mountPath": "/opt/output"}
     ]
 
-    container: dict[str, object] = {
+    main: dict[str, object] = {
         "name": job_name,
         "image": image,
         "volumeMounts": volume_mounts,
@@ -44,7 +52,90 @@ def _render_job_manifest(
 
     if gpu:
         resource_key = f"nvidia.com/mig-{gpu}"
-        container["resources"] = {"limits": {resource_key: 1}}
+        main["resources"] = {"limits": {resource_key: 1}}
+
+    presign_endpoint = f"{api_base_url.rstrip('/')}/jobs/{job_id}/runs/{run_id}/presign"
+    uploader_script = r"""
+        set -euo pipefail
+
+        apk add --no-cache curl jq ca-certificates >/dev/null
+
+        API="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS}"
+        SA_TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+        CA_CERT="/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+        POD_URL="${API}/api/v1/namespaces/${POD_NAMESPACE}/pods/${POD_NAME}"
+
+        MAIN="${MAIN_CONTAINER_NAME}"
+
+        echo "Esperando a que el contenedor ${MAIN} termine..."
+        exit_code=""
+        deadline=$(( $(date +%s) + 3600 ))
+
+        while [ -z "$exit_code" ]; do
+            status="$(curl -sS -w '\n%{http_code}\n' --cacert "${CA_CERT}" \
+            -H "Authorization: Bearer ${SA_TOKEN}" "${POD_URL}")" || true
+
+            body="$(printf '%s' "$status" | head -n -1)"
+            code="$(printf '%s' "$status" | tail -n 1)"
+
+            if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            exit_code="$(printf '%s' "$body" \
+                | jq -r --arg MAIN "$MAIN" '
+                    .status.containerStatuses[]
+                    | select(.name==$MAIN)
+                    | .state.terminated.exitCode // empty
+                ' 2>/dev/null || true)"
+            else
+            echo "WARN: kube API devolvió HTTP $code; reintento..."
+            fi
+
+            if [ -z "$exit_code" ]; then
+            [ "$(date +%s)" -gt "$deadline" ] && { echo "Timeout esperando exitCode"; exit 1; }
+            sleep 2
+            fi
+        done
+
+        echo "Contenedor ${MAIN} terminó con exitCode=${exit_code}"
+        if [ "$exit_code" != "0" ]; then
+            echo "Main container falló; no se suben outputs. Abortando."
+            exit 1
+        fi
+
+        find /opt/output -type f | while read -r F; do
+            REL="${F#/opt/output/}"
+            PRES="$(curl -fsSL -H "X-Run-Token: ${RUN_TOKEN}" \
+                    --get --data-urlencode "path=${REL}" \
+                    "${PRESIGN_ENDPOINT}")"
+
+            URL="$(printf '%s' "$PRES" | jq -r '.url // empty')"
+            [ -n "$URL" ] || { echo "ERROR: presign no devolvió URL para ${REL}"; exit 2; }
+
+            curl -f -X PUT --upload-file "$F" "$URL"
+        done
+
+        echo "Upload completado."
+    """
+
+    uploader = {
+        "name": f"{job_name}-uploader",
+        "image": "alpine:3.20",
+        "command": ["/bin/sh", "-lc"],
+        "args": [uploader_script],
+        "env": [
+            {"name": "RUN_TOKEN", "value": run_token},
+            {"name": "PRESIGN_ENDPOINT", "value": presign_endpoint},
+            {"name": "MAIN_CONTAINER_NAME", "value": job_name},
+            {
+                "name": "POD_NAME",
+                "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
+            },
+            {
+                "name": "POD_NAMESPACE",
+                "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}},
+            },
+        ],
+        "volumeMounts": volume_mounts,
+    }
 
     volumes: list[dict[str, object]] = [
         {"name": "output", "persistentVolumeClaim": {"claimName": output_claim}}
@@ -52,8 +143,10 @@ def _render_job_manifest(
 
     template: dict[str, object] = {
         "spec": {
+            "serviceAccountName": "api-client",
             "restartPolicy": "Never",
-            "containers": [container],
+            "securityContext": {"fsGroup": 1000},
+            "containers": [main, uploader],
             "volumes": volumes,
         }
     }
@@ -109,14 +202,16 @@ def create_job(db: Session, payload: JobCreate, user_id: int) -> Job:
     return job
 
 
-def create_job_run(db: Session, job: Job, out_volume: Volume, pod_name: str):
+def create_job_run(db: Session, job: Job, out_volume: Volume):
+    run_token = uuid4().hex
     job_run = JobRun(
         job_id=job.id,
         status=RunStatus.pending,
-        k8s_pod_name=pod_name,
+        k8s_pod_name=None,
         started_at=None,
         finished_at=None,
         output_volume_id=out_volume.id,
+        run_token=run_token,
     )
     db.add(job_run)
     db.flush()
@@ -156,21 +251,28 @@ def create_and_run_job(
     )
 
     job = create_job(db, payload=payload, user_id=user.id)
+    job_run = create_job_run(db, job, output_pvc)
+
     job_manifest = _render_job_manifest(
         image=job.image,
         gpu=job.gpu_profile,
         job_name=job.k8s_job_name,
         output_claim=output_pvc.pvc_name,
+        run_id=job_run.id,
+        job_id=job.id,
+        run_token=job_run.run_token,
+        api_base_url=settings.api_base_url,
     )
     apply_pvc(core, output_pvc_manifest)
     apply_job(batch, job_manifest)
 
     pod = wait_for_first_pod_of_job(core, job.k8s_job_name)
     if not pod:
+        db.rollback()
         raise HTTPException(
             status_code=400, detail=f"Could not create pod for job {job.id}"
         )
-    job_run = create_job_run(db, job, output_pvc, pod.metadata.name)  # type: ignore
+    job_run.k8s_pod_name = pod.metadata.name
     db.commit()
     return job_run
 
