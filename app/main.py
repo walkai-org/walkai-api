@@ -65,7 +65,8 @@ SCOPES = "read:user user:email"
 JWT_SECRET = settings.jwt_secret
 JWT_ALGO = settings.jwt_algo
 
-Base.metadata.create_all(bind=engine)
+if settings.app_env != "test":  # avoid touching external DB during tests
+    Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="walk:ai API", version="0.1.0", lifespan=lifespan)
 
