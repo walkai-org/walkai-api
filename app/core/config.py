@@ -1,5 +1,8 @@
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
+from fastapi import FastAPI
+from kubernetes import client
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,8 +45,41 @@ class Settings(BaseSettings):
     aws_s3_bucket: str = Field(alias="AWS_S3_BUCKET")
 
     database_url: str = Field(alias="DATABASE_URL")
+    ecr_arn: str = Field(alias="ECR_ARN")
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    from app.core.aws import build_ecr_client, build_s3_client
+    from app.core.k8s import build_kubernetes_api_client
+    from app.core.redis import create_redis_client
+
+    api_client = build_kubernetes_api_client()
+    app.state.core = client.CoreV1Api(api_client)
+    app.state.batch = client.BatchV1Api(api_client)
+
+    redis_client = create_redis_client()
+    app.state.redis = redis_client
+
+    s3_client = build_s3_client()
+    app.state.s3_client = s3_client
+
+    ecr_client = build_ecr_client()
+    app.state.ecr_client = ecr_client
+
+    try:
+        yield
+    finally:
+        api_client.close()
+        redis_client.close()
+        close_s3 = getattr(s3_client, "close", None)
+        if callable(close_s3):
+            close_s3()
+        close_ecr = getattr(ecr_client, "close", None)
+        if callable(close_ecr):
+            close_ecr()

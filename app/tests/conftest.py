@@ -38,7 +38,7 @@ def db_session(engine) -> Generator[Session]:
         yield session
     finally:
         session.close()
-        trans.rollback()  # undo everything this test did
+        trans.rollback()
         connection.close()
 
 
