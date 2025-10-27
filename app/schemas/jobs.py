@@ -1,6 +1,5 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -73,13 +72,13 @@ class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class JobDetailOut(JobOut):
+class JobDetailOut(BaseModel):
+    id: int
+    image: str
+    gpu_profile: GPUProfile
+    submitted_at: datetime
+    created_by_id: int
+    k8s_job_name: str
     runs: list[JobRunDetail]
 
     model_config = ConfigDict(from_attributes=True)
-
-
-class PodList(BaseModel):
-    name: str
-    namespace: str
-    status: Literal["Running", "Pending", "ContainerCreating", "Succeeded"]

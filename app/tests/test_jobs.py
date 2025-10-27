@@ -2,7 +2,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.config import get_settings
 from app.core.k8s import get_batch, get_core
 from app.main import app
 from app.models.jobs import JobRun, RunStatus
@@ -139,50 +138,6 @@ def test_get_job_detail_not_found(auth_client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Job 9999 not found"
-
-
-def test_list_pods_returns_pod_statuses(client):
-    fake_core_calls: dict[str, object] = {}
-    fake_core = SimpleNamespace(
-        list_namespaced_pod=lambda namespace, watch: _fake_list_pods(
-            fake_core_calls, namespace, watch
-        )
-    )
-    fake_settings = SimpleNamespace(namespace="testing")
-
-    app.dependency_overrides[get_core] = lambda: fake_core
-    app.dependency_overrides[get_settings] = lambda: fake_settings
-
-    try:
-        response = client.get("/jobs/pods")
-    finally:
-        app.dependency_overrides.pop(get_core, None)
-        app.dependency_overrides.pop(get_settings, None)
-
-    assert response.status_code == 200
-    assert response.json() == [
-        {"name": "pod-a", "namespace": "testing", "status": "Running"},
-        {"name": "pod-b", "namespace": "testing", "status": "Pending"},
-    ]
-    assert fake_core_calls["namespace"] == "testing"
-    assert fake_core_calls["watch"] is False
-
-
-def _fake_list_pods(store: dict[str, object], namespace: str, watch: bool):
-    store["namespace"] = namespace
-    store["watch"] = watch
-    return SimpleNamespace(
-        items=[
-            SimpleNamespace(
-                metadata=SimpleNamespace(name="pod-a", namespace=namespace),
-                status=SimpleNamespace(phase="Running"),
-            ),
-            SimpleNamespace(
-                metadata=SimpleNamespace(name="pod-b", namespace=namespace),
-                status=SimpleNamespace(phase="Pending"),
-            ),
-        ]
-    )
 
 
 def test_render_pvc_manifest_shapes_storage():
