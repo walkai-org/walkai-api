@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
+from botocore.client import BaseClient
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -14,9 +15,9 @@ from sqlalchemy.orm import Session
 
 from app.api import cluster, jobs, tokens
 from app.api.deps import get_current_user, require_admin
-from app.core.config import get_settings
+from app.core.aws import get_ecr_client
+from app.core.config import get_settings, lifespan
 from app.core.database import engine, get_db, ping_database
-from app.core.k8s import lifespan
 from app.core.redis import get_redis
 from app.core.security import (
     create_access,
@@ -64,7 +65,8 @@ SCOPES = "read:user user:email"
 JWT_SECRET = settings.jwt_secret
 JWT_ALGO = settings.jwt_algo
 
-Base.metadata.create_all(bind=engine)
+if settings.app_env != "test":  # avoid touching external DB during tests
+    Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="walk:ai API", version="0.1.0", lifespan=lifespan)
 
@@ -186,6 +188,29 @@ def create_invitation(
     bg.add_task(send_invitation_via_acs_smtp, payload.email, invitation_link)
 
     return {"message": "If the email address is valid, instructions will be sent."}
+
+
+@app.get("/registry")
+def get_registry_credentials(
+    ecr_client: BaseClient = Depends(get_ecr_client),
+    _: str = Depends(require_admin),
+):
+    response = ecr_client.get_authorization_token()
+    auth_data = response.get("authorizationData", [])
+    if not auth_data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR authorization data is unavailable",
+        )
+
+    token = auth_data[0].get("authorizationToken")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR authorization token is missing",
+        )
+
+    return {"token": token, "ecr_arn": settings.ecr_arn}
 
 
 @app.post("/invitations/verify", response_model=InvitationVerifyOut)

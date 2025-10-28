@@ -13,6 +13,7 @@ FastAPI service powering the walk:ai backend APIs.
 ## Environment Variables
 
 Copy `.env.example` to `.env` and provide the values required by your deployment.
+- `DATABASE_URL` can point to PostgreSQL in shared environments or a local SQLite file such as `sqlite:///./data/dev.db` for lightweight development.
 
 ## Create a dev cluster
 
