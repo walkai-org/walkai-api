@@ -52,8 +52,6 @@ class Job(Base):
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_by: Mapped[User] = relationship(back_populates="jobs", init=False)
 
-    k8s_job_name: Mapped[str]
-
     runs: Mapped[list["JobRun"]] = relationship(
         "JobRun", back_populates="job", init=False
     )
@@ -68,6 +66,7 @@ class JobRun(Base):
 
     status: Mapped[RunStatus] = mapped_column(Enum(RunStatus))
     run_token: Mapped[str]
+    k8s_job_name: Mapped[str]
 
     output_volume_id: Mapped[int] = mapped_column(ForeignKey("volumes.id"))
     output_volume: Mapped[Volume] = relationship(

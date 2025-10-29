@@ -75,12 +75,12 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
     assert job_item["image"] == payload.image
     assert job_item["gpu_profile"] == payload.gpu.value
     assert job_item["created_by_id"] == user.id
-    assert job_item["k8s_job_name"] == job.k8s_job_name
     assert job_item["submitted_at"]
     assert job_item["runs"] == [
         {
             "id": run.id,
             "status": run.status.value,
+            "k8s_job_name": run.k8s_job_name,
             "k8s_pod_name": run.k8s_pod_name,
             "started_at": run.started_at,
             "finished_at": run.finished_at,
@@ -112,6 +112,7 @@ def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
     run_data = data["runs"][0]
     assert run_data["id"] == run.id
     assert run_data["status"] == run.status.value
+    assert run_data["k8s_job_name"] == run.k8s_job_name
     assert run_data["k8s_pod_name"] == run.k8s_pod_name
     assert run_data["output_volume"] == {
         "id": output_volume.id,
@@ -213,7 +214,6 @@ def test_create_job_populates_fields(db_session, test_user):
     assert job.image == payload.image
     assert job.gpu_profile == payload.gpu
     assert job.created_by_id == test_user.id
-    assert job.k8s_job_name
     db_session.expire_all()
     stored = db_session.get(job_service.Job, job.id)
     assert stored is not None
@@ -229,6 +229,7 @@ def test_create_job_run_links_job_and_volume(db_session, test_user):
     run = job_service.create_job_run(db_session, job, volume)
 
     assert run.job_id == job.id
+    assert run.k8s_job_name
     assert run.output_volume_id == volume.id
     assert run.k8s_pod_name is None
     assert run.status == RunStatus.pending
@@ -259,10 +260,11 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
 
     assert job_run.status == RunStatus.pending
     assert job_run.k8s_pod_name == "pod-xyz"
+    assert job_run.k8s_job_name
     assert captured["pvc"][0] is fake_core
     assert captured["job"][0] is fake_batch
     assert captured["pvc"][1]["metadata"]["name"] == job_run.output_volume.pvc_name
-    assert captured["job"][1]["metadata"]["name"] == job_run.job.k8s_job_name
+    assert captured["job"][1]["metadata"]["name"] == job_run.k8s_job_name
 
     db_session.expire_all()
     stored_run = db_session.get(JobRun, job_run.id)
