@@ -12,4 +12,6 @@ RUN uv sync --locked
 
 COPY . /app
 
-ENTRYPOINT ["uv","run","uvicorn","app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+RUN chmod +x /app/docker-entrypoint.sh
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
