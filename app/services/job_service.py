@@ -157,7 +157,7 @@ def _render_job_manifest(
         "metadata": {"name": job_name},
         "spec": {
             "backoffLimit": 0,
-            "ttlSecondsAfterFinished": 0,
+            "ttlSecondsAfterFinished": 12,
             "template": template,
         },
     }
