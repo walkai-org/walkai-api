@@ -1,7 +1,9 @@
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Final
 
 from fastapi import HTTPException
+from kubernetes import client
+from kubernetes.client import ApiException
 from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -83,3 +85,51 @@ def _sync_job_runs(db: Session, pods: Sequence[Pod]) -> None:
 
     if updated:
         db.commit()
+
+
+def stream_pod_logs(
+    core: client.CoreV1Api,
+    *,
+    pod_name: str,
+    namespace: str,
+    container: str | None,
+    follow: bool,
+    tail_lines: int | None,
+    timestamps: bool,
+    chunk_size: int = 1024,
+) -> Iterable[str]:
+    """Stream logs from a Kubernetes pod, decoding into UTF-8 text chunks."""
+
+    try:
+        response = core.read_namespaced_pod_log(
+            name=pod_name,
+            namespace=namespace,
+            container=container,
+            follow=follow,
+            tail_lines=tail_lines,
+            timestamps=timestamps,
+            _preload_content=False,
+        )
+    except ApiException as exc:  # pragma: no cover - exercised via HTTP layer
+        if exc.status == 404:
+            raise HTTPException(status_code=404, detail=f"Pod {pod_name} not found")
+        raise HTTPException(
+            status_code=502,
+            detail="Kubernetes API error while fetching pod logs",
+        ) from exc
+    except Exception as exc:  # pragma: no cover - guard against unexpected errors
+        raise HTTPException(
+            status_code=502,
+            detail="Unexpected error while streaming pod logs",
+        ) from exc
+
+    def _iterator() -> Iterable[str]:
+        try:
+            for chunk in response.stream(amt=chunk_size):
+                if not chunk:
+                    continue
+                yield chunk.decode("utf-8", errors="replace")
+        finally:
+            response.close()
+
+    return _iterator()
