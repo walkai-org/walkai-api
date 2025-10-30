@@ -192,12 +192,10 @@ def create_volume(db: Session, storage: int, is_input: bool) -> Volume:
 
 
 def create_job(db: Session, payload: JobCreate, user_id: int) -> Job:
-    job_name = str(uuid4())
     job = Job(
         image=payload.image,
         gpu_profile=payload.gpu,
         created_by_id=user_id,
-        k8s_job_name=job_name,
     )
     db.add(job)
     db.flush()
@@ -208,6 +206,7 @@ def create_job(db: Session, payload: JobCreate, user_id: int) -> Job:
 
 def create_job_run(db: Session, job: Job, out_volume: Volume):
     run_token = uuid4().hex
+    job_name = str(uuid4())
     job_run = JobRun(
         job_id=job.id,
         status=RunStatus.pending,
@@ -216,6 +215,7 @@ def create_job_run(db: Session, job: Job, out_volume: Volume):
         finished_at=None,
         output_volume_id=out_volume.id,
         run_token=run_token,
+        k8s_job_name=job_name,
     )
     db.add(job_run)
     db.flush()
@@ -260,7 +260,7 @@ def create_and_run_job(
     job_manifest = _render_job_manifest(
         image=job.image,
         gpu=job.gpu_profile,
-        job_name=job.k8s_job_name,
+        job_name=job_run.k8s_job_name,
         output_claim=output_pvc.pvc_name,
         run_id=job_run.id,
         job_id=job.id,
@@ -270,13 +270,13 @@ def create_and_run_job(
     apply_pvc(core, output_pvc_manifest)
     apply_job(batch, job_manifest)
 
-    pod = wait_for_first_pod_of_job(core, job.k8s_job_name)
+    pod = wait_for_first_pod_of_job(core, job_run.k8s_job_name)
     if not pod:
         db.rollback()
         raise HTTPException(
             status_code=400, detail=f"Could not create pod for job {job.id}"
         )
-    job_run.k8s_pod_name = pod.metadata.name
+    job_run.k8s_pod_name = pod.metadata.name  # type: ignore
     db.commit()
     return job_run
 
