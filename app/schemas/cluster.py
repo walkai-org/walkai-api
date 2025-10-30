@@ -19,6 +19,7 @@ class PodStatus(StrEnum):
     completed = "Completed"
     error = "Error"
     succeeded = "Succeeded"
+    crash = "CrashLoopBackOff"
 
 
 class Pod(BaseModel):
@@ -26,6 +27,8 @@ class Pod(BaseModel):
     namespace: str
     status: PodStatus
     gpu: GPUProfile
+    start_time: datetime
+    finish_time: datetime | None
 
 
 class ClusterInsightsIn(BaseModel):
