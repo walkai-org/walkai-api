@@ -1,6 +1,9 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+from kubernetes.client import ApiException
+
+from app.core.k8s import get_core
 from app.core.redis import get_redis
 from app.main import app
 from app.models.jobs import Job, JobRun, RunStatus, Volume
@@ -153,6 +156,93 @@ def test_get_pods_returns_404_without_snapshot(auth_client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Cluster insights not available"
+
+
+def test_stream_pod_logs_returns_text(auth_client):
+    client, _ = auth_client
+
+    chunks = [b"line-1\n", b"line-2\n"]
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def stream(self, amt: int = 0):  # noqa: ARG002 - interface compatibility
+            yield from chunks
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeCore:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def read_namespaced_pod_log(
+            self,
+            *,
+            name: str,
+            namespace: str,
+            container: str | None,
+            follow: bool,
+            tail_lines: int | None,
+            timestamps: bool,
+            _preload_content: bool,
+        ) -> FakeResponse:
+            self.calls.append(
+                {
+                    "name": name,
+                    "namespace": namespace,
+                    "container": container,
+                    "follow": follow,
+                    "tail_lines": tail_lines,
+                    "timestamps": timestamps,
+                    "_preload_content": _preload_content,
+                }
+            )
+            assert _preload_content is False
+            return FakeResponse()
+
+    fake_core = FakeCore()
+    app.dependency_overrides[get_core] = lambda: fake_core
+
+    try:
+        response = client.get("/cluster/pods/pod-42/logs")
+    finally:
+        app.dependency_overrides.pop(get_core, None)
+
+    assert response.status_code == 200
+    assert response.text == "line-1\nline-2\n"
+    assert response.headers["content-type"].startswith("text/plain")
+
+    assert fake_core.calls == [
+        {
+            "name": "pod-42",
+            "namespace": "walkai",
+            "container": None,
+            "follow": True,
+            "tail_lines": 200,
+            "timestamps": True,
+            "_preload_content": False,
+        }
+    ]
+
+
+def test_stream_pod_logs_propagates_not_found(auth_client):
+    client, _ = auth_client
+
+    class FakeCore:
+        def read_namespaced_pod_log(self, *_, **__):
+            raise ApiException(status=404)
+
+    app.dependency_overrides[get_core] = lambda: FakeCore()
+
+    try:
+        response = client.get("/cluster/pods/missing/logs")
+    finally:
+        app.dependency_overrides.pop(get_core, None)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Pod missing not found"
 
 
 def _as_naive_utc(dt: datetime | None) -> datetime | None:

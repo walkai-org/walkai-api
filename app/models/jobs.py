@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 from enum import StrEnum
 
@@ -14,6 +16,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.models.users import User
 from app.schemas.jobs import GPUProfile, RunStatus
+
+
+def _normalize_started_at(
+    value: datetime.datetime | None,
+) -> datetime.datetime:
+    if value is None:
+        return datetime.datetime.min.replace(tzinfo=datetime.UTC)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.UTC)
+    return value.astimezone(datetime.UTC)
 
 
 class VolumeState(StrEnum):
@@ -59,9 +71,18 @@ class Job(Base):
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_by: Mapped[User] = relationship(back_populates="jobs", init=False)
 
-    runs: Mapped[list["JobRun"]] = relationship(
+    runs: Mapped[list[JobRun]] = relationship(
         "JobRun", back_populates="job", init=False
     )
+
+    @property
+    def latest_run(self) -> JobRun | None:
+        if not self.runs:
+            return None
+        return max(
+            self.runs,
+            key=lambda run: (_normalize_started_at(run.started_at), run.id),
+        )
 
 
 class JobRun(Base):
