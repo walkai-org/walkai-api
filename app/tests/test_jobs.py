@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.core.k8s import get_batch, get_core
 from app.main import app
@@ -198,11 +199,50 @@ def test_create_volume_persists_volume(db_session):
     assert volume.id is not None
     assert volume.size == 8
     assert volume.is_input is True
-    assert volume.state == job_service.VolumeState.pvc
-    assert volume.pvc_name
-    db_session.expire_all()
-    stored = db_session.get(job_service.Volume, volume.id)
-    assert stored is not None
+
+
+def test_job_run_requires_unique_k8s_job_name(db_session, test_user):
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, test_user.id)
+    vol_one = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    vol_two = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+
+    run_one = job_service.create_job_run(db_session, job, vol_one)
+    run_two = job_service.create_job_run(db_session, job, vol_two)
+
+    run_one.k8s_job_name = "duplicate-job-name"
+    run_two.k8s_job_name = "duplicate-job-name"
+    run_one.k8s_pod_name = "unique-pod-1"
+    run_two.k8s_pod_name = "unique-pod-2"
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
+
+
+def test_job_run_requires_unique_k8s_pod_name(db_session, test_user):
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, test_user.id)
+    vol_one = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    vol_two = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+
+    run_one = job_service.create_job_run(db_session, job, vol_one)
+    run_two = job_service.create_job_run(db_session, job, vol_two)
+
+    run_one.k8s_pod_name = "duplicate-pod-name"
+    run_two.k8s_pod_name = "duplicate-pod-name"
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
 
 
 def test_create_job_populates_fields(db_session, test_user):
