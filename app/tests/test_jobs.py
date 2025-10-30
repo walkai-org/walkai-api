@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -77,16 +78,45 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
     assert job_item["gpu_profile"] == payload.gpu.value
     assert job_item["created_by_id"] == user.id
     assert job_item["submitted_at"]
-    assert job_item["runs"] == [
-        {
-            "id": run.id,
-            "status": run.status.value,
-            "k8s_job_name": run.k8s_job_name,
-            "k8s_pod_name": run.k8s_pod_name,
-            "started_at": run.started_at,
-            "finished_at": run.finished_at,
-        }
-    ]
+    assert job_item["latest_run"] == {
+        "id": run.id,
+        "status": run.status.value,
+        "k8s_job_name": run.k8s_job_name,
+        "k8s_pod_name": run.k8s_pod_name,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
+
+
+def test_list_jobs_picks_run_with_latest_started_time(auth_client, db_session):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g3_40, storage=6)
+    job = job_service.create_job(db_session, payload, user.id)
+
+    vol_one = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    vol_two = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+
+    earlier_run = job_service.create_job_run(db_session, job, vol_one)
+    later_run = job_service.create_job_run(db_session, job, vol_two)
+
+    earlier_start = datetime.now(UTC) - timedelta(minutes=10)
+    later_start = earlier_start + timedelta(minutes=5)
+
+    earlier_run.k8s_pod_name = "pod-earlier"
+    later_run.k8s_pod_name = "pod-later"
+    earlier_run.started_at = earlier_start
+    later_run.started_at = later_start
+    db_session.commit()
+
+    response = client.get("/jobs/")
+
+    assert response.status_code == 200
+    latest_run = response.json()[0]["latest_run"]
+    assert latest_run["id"] == later_run.id
 
 
 def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):

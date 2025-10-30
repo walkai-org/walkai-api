@@ -67,7 +67,7 @@ class JobOut(BaseModel):
     gpu_profile: GPUProfile
     submitted_at: datetime
     created_by_id: int
-    runs: list[JobRunSummary]
+    latest_run: JobRunSummary | None
 
     model_config = ConfigDict(from_attributes=True)
 
