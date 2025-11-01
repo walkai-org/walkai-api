@@ -1,14 +1,13 @@
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from kubernetes import client
-from redis import Redis
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
+from app.core.aws import get_ddb_cluster_cache_table
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.k8s import get_core
-from app.core.redis import get_redis
 from app.models.users import User
 from app.schemas.cluster import ClusterInsightsIn, GPUResources, Pod
 from app.services import cluster_service
@@ -20,12 +19,12 @@ settings = get_settings()
 @router.post("/insights", status_code=status.HTTP_204_NO_CONTENT)
 def submit_insights(
     payload: ClusterInsightsIn,
-    redis_client: Redis = Depends(get_redis),
+    ddb_table=Depends(get_ddb_cluster_cache_table),
     db: Session = Depends(get_db),
     _=Depends(require_admin),
 ) -> None:
     cluster_service.save_cluster_insights(
-        redis_client=redis_client,
+        ddb_table=ddb_table,
         payload=payload,
         db=db,
     )
@@ -33,19 +32,19 @@ def submit_insights(
 
 @router.get("/resources", response_model=list[GPUResources])
 def get_resources(
-    redis_client: Redis = Depends(get_redis),
+    ddb_table=Depends(get_ddb_cluster_cache_table),
     _: User = Depends(get_current_user),
 ) -> list[GPUResources]:
-    snapshot = cluster_service.get_insights(redis_client)
+    snapshot = cluster_service.get_insights(ddb_table)
     return snapshot.gpus
 
 
 @router.get("/pods", response_model=list[Pod])
 def get_pods(
-    redis_client: Redis = Depends(get_redis),
+    ddb_table=Depends(get_ddb_cluster_cache_table),
     _: User = Depends(get_current_user),
 ) -> list[Pod]:
-    snapshot = cluster_service.get_insights(redis_client)
+    snapshot = cluster_service.get_insights(ddb_table)
     return snapshot.pods
 
 

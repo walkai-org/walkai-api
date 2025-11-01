@@ -44,7 +44,8 @@ class Settings(BaseSettings):
 
     database_url: str = Field(alias="DATABASE_URL")
     ecr_arn: str = Field(alias="ECR_ARN")
-    ddb_table_oauth = Field(alias="DYNAMODB_OAUTH_TABLE")
+    ddb_table_oauth: str = Field(alias="DYNAMODB_OAUTH_TABLE")
+    ddb_table_cluster_cache: str = Field(alias="DYNAMODB_CLUSTER_CACHE_TABLE")
 
 
 @lru_cache
@@ -54,7 +55,12 @@ def get_settings() -> Settings:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.core.aws import build_ecr_client, build_s3_client, create_ddb_oauth_table
+    from app.core.aws import (
+        build_ecr_client,
+        build_s3_client,
+        create_ddb_cluster_cache_table,
+        create_ddb_oauth_table,
+    )
     from app.core.k8s import build_kubernetes_api_client
 
     api_client = build_kubernetes_api_client()
@@ -69,6 +75,9 @@ async def lifespan(app: FastAPI):
 
     ddb_oauth_table = create_ddb_oauth_table()
     app.state.ddb_oauth_table = ddb_oauth_table
+
+    ddb_cluster_table = create_ddb_cluster_cache_table()
+    app.state.ddb_cluster_table = ddb_cluster_table
 
     try:
         yield

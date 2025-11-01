@@ -60,8 +60,20 @@ def create_ddb_oauth_table():
     return dynamodb.Table(settings.ddb_table_oauth)
 
 
+def create_ddb_cluster_cache_table():
+    dynamodb = _build_dynamodb_resource()
+    return dynamodb.Table(settings.ddb_table_cluster_cache)
+
+
 def get_ddb_oauth_table(request: Request):
     table = getattr(request.app.state, "ddb_oauth_table", None)
+    if table is None:
+        raise RuntimeError("DynamoDB table is not configured on application state")
+    return table
+
+
+def get_ddb_cluster_cache_table(request: Request):
+    table = getattr(request.app.state, "ddb_cluster_table", None)
     if table is None:
         raise RuntimeError("DynamoDB table is not configured on application state")
     return table

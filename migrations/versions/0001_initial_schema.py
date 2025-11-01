@@ -35,11 +35,6 @@ def upgrade() -> None:
         name="runstatus",
     )
 
-    bind = op.get_bind()
-    volume_state_enum.create(bind, checkfirst=True)
-    gpu_profile_enum.create(bind, checkfirst=True)
-    run_status_enum.create(bind, checkfirst=True)
-
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), primary_key=True),
