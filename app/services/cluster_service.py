@@ -1,10 +1,10 @@
+import time
 from collections.abc import Iterable, Sequence
 from typing import Final
 
 from fastapi import HTTPException
 from kubernetes import client
 from kubernetes.client import ApiException
-from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,7 +12,7 @@ from app.models.jobs import JobRun
 from app.schemas.cluster import ClusterInsightsIn, Pod, PodStatus
 from app.schemas.jobs import RunStatus
 
-INSIGHTS_KEY: Final = "cluster:insights"
+INSIGHTS_PK: Final = "cache#cluster:insights"
 
 # Map Pod status reported by Kubernetes into our internal JobRun status.
 _POD_STATUS_TO_RUN: Final = {
@@ -26,28 +26,37 @@ _POD_STATUS_TO_RUN: Final = {
 }
 
 
-def save_cluster_insights(
-    redis_client: Redis, payload: ClusterInsightsIn, db: Session
-) -> None:
+def save_cluster_insights(ddb_table, payload: ClusterInsightsIn, db: Session) -> None:
     """
     Persist the latest cluster snapshot so other endpoints can read it quickly.
     """
     _sync_job_runs(db, payload.pods)
-    redis_client.set(INSIGHTS_KEY, payload.model_dump_json())
+
+    ddb_table.put_item(
+        Item={
+            "pk": INSIGHTS_PK,
+            "data": payload.model_dump_json(),
+            "updated_at": int(time.time()),
+        }
+    )
 
 
-def get_insights(redis_client: Redis) -> ClusterInsightsIn:
-    snapshot = load_cluster_insights(redis_client)
+def get_insights(ddb_table) -> ClusterInsightsIn:
+    snapshot = load_cluster_insights(ddb_table)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Cluster insights not available")
     return snapshot
 
 
-def load_cluster_insights(redis_client: Redis) -> ClusterInsightsIn | None:
-    raw_snapshot = redis_client.get(INSIGHTS_KEY)
-    if not raw_snapshot:
+def load_cluster_insights(ddb_table) -> ClusterInsightsIn | None:
+    resp = ddb_table.get_item(
+        Key={"pk": INSIGHTS_PK},
+        ConsistentRead=True,
+    )
+    item = resp.get("Item")
+    if not item:
         return None
-    return ClusterInsightsIn.model_validate_json(raw_snapshot)
+    return ClusterInsightsIn.model_validate_json(item["data"])
 
 
 def _sync_job_runs(db: Session, pods: Sequence[Pod]) -> None:
