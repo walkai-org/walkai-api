@@ -48,3 +48,20 @@ def presign_put_url(s3_client: BaseClient, key: str, expires: int = 3600) -> str
         ExpiresIn=expires,
         HttpMethod="PUT",
     )
+
+
+def _build_dynamodb_resource():
+    session = _build_session()
+    return session.resource("dynamodb")
+
+
+def create_ddb_oauth_table():
+    dynamodb = _build_dynamodb_resource()
+    return dynamodb.Table(settings.ddb_table_oauth)
+
+
+def get_ddb_oauth_table(request: Request):
+    table = getattr(request.app.state, "ddb_oauth_table", None)
+    if table is None:
+        raise RuntimeError("DynamoDB table is not configured on application state")
+    return table

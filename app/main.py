@@ -9,16 +9,14 @@ from botocore.client import BaseClient
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from redis import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api import cluster, jobs, tokens
 from app.api.deps import get_current_user, require_admin
-from app.core.aws import get_ecr_client
+from app.core.aws import get_ddb_oauth_table, get_ecr_client
 from app.core.config import get_settings, lifespan
 from app.core.database import engine, get_db, ping_database
-from app.core.redis import get_redis
 from app.core.security import (
     create_access,
     gen_pkce,
@@ -37,8 +35,8 @@ from app.schemas.users import (
     UserCreate,
     UserOut,
 )
+from app.services.dynamodb_service import load_oauth_tx, save_oauth_tx
 from app.services.email_service import send_invitation_via_acs_smtp
-from app.services.redis_service import load_oauth_tx, save_oauth_tx
 
 root = logging.getLogger()
 if not root.handlers:  # don't double-add in reloads
@@ -251,7 +249,7 @@ def accept_invitation(body: InvitationAcceptIn, db: Session = Depends(get_db)):
 def github_start(
     flow: str,
     invitation_token: str | None = None,
-    redis_client: Redis = Depends(get_redis),
+    ddb_oauth_table=Depends(get_ddb_oauth_table),
 ):
     if flow == "register" and not invitation_token:
         raise HTTPException(
@@ -265,7 +263,7 @@ def github_start(
     if invitation_token:
         data["invitation_token"] = invitation_token
 
-    save_oauth_tx(redis_client, state, data)
+    save_oauth_tx(ddb_oauth_table, state, data)
 
     params = {
         "client_id": CLIENT_ID,
@@ -284,9 +282,9 @@ def github_callback(
     code: str,
     state: str,
     db: Session = Depends(get_db),
-    redis_client: Redis = Depends(get_redis),
+    ddb_oauth_table=Depends(get_ddb_oauth_table),
 ):
-    tx = load_oauth_tx(redis_client, state)
+    tx = load_oauth_tx(ddb_oauth_table, state)
     if not tx:
         raise HTTPException(status_code=400, detail="Invalid state")
 

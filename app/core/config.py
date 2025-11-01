@@ -26,8 +26,6 @@ class Settings(BaseSettings):
     frontend_home: str | None = Field(default=None, alias="FRONTEND_HOME")
     invite_base_url: str | None = Field(default=None, alias="INVITE_BASE_URL")
 
-    redis_url: str = Field(alias="REDIS_URL")
-
     acs_smtp_host: str = Field(default="smtp.azurecomm.net", alias="ACS_SMTP_HOST")
     acs_smtp_port: int = Field(default=587, alias="ACS_SMTP_PORT")
     acs_smtp_username: str | None = Field(default=None, alias="ACS_SMTP_USERNAME")
@@ -39,13 +37,14 @@ class Settings(BaseSettings):
     namespace: str = Field(default="walkai", alias="JOB_NAMESPACE")
     api_base_url: str = Field(alias="API_BASE_URL")
 
-    aws_access_key_id: str = Field(alias="AWS_ACCES_KEY_ID")
+    aws_access_key_id: str = Field(alias="AWS_ACCESS_KEY_ID")
     aws_secret_access_key: str = Field(alias="AWS_SECRET_ACCESS_KEY")
     aws_region: str = Field(alias="AWS_REGION")
     aws_s3_bucket: str = Field(alias="AWS_S3_BUCKET")
 
     database_url: str = Field(alias="DATABASE_URL")
     ecr_arn: str = Field(alias="ECR_ARN")
+    ddb_table_oauth = Field(alias="DYNAMODB_OAUTH_TABLE")
 
 
 @lru_cache
@@ -55,16 +54,12 @@ def get_settings() -> Settings:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from app.core.aws import build_ecr_client, build_s3_client
+    from app.core.aws import build_ecr_client, build_s3_client, create_ddb_oauth_table
     from app.core.k8s import build_kubernetes_api_client
-    from app.core.redis import create_redis_client
 
     api_client = build_kubernetes_api_client()
     app.state.core = client.CoreV1Api(api_client)
     app.state.batch = client.BatchV1Api(api_client)
-
-    redis_client = create_redis_client()
-    app.state.redis = redis_client
 
     s3_client = build_s3_client()
     app.state.s3_client = s3_client
@@ -72,11 +67,13 @@ async def lifespan(app: FastAPI):
     ecr_client = build_ecr_client()
     app.state.ecr_client = ecr_client
 
+    ddb_oauth_table = create_ddb_oauth_table()
+    app.state.ddb_oauth_table = ddb_oauth_table
+
     try:
         yield
     finally:
         api_client.close()
-        redis_client.close()
         close_s3 = getattr(s3_client, "close", None)
         if callable(close_s3):
             close_s3()
