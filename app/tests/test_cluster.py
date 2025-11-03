@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from kubernetes.client import ApiException
 
@@ -168,6 +169,11 @@ def test_get_pods_returns_404_without_snapshot(auth_client):
     assert response.json()["detail"] == "Cluster insights not available"
 
 
+def _fake_pod(*container_names: str) -> SimpleNamespace:
+    containers = [SimpleNamespace(name=name) for name in container_names]
+    return SimpleNamespace(spec=SimpleNamespace(containers=containers))
+
+
 def test_stream_pod_logs_returns_text(auth_client):
     client, _ = auth_client
 
@@ -186,6 +192,11 @@ def test_stream_pod_logs_returns_text(auth_client):
     class FakeCore:
         def __init__(self) -> None:
             self.calls: list[dict] = []
+            self.pod_calls: list[dict] = []
+
+        def read_namespaced_pod(self, *, name: str, namespace: str):
+            self.pod_calls.append({"name": name, "namespace": namespace})
+            return _fake_pod(name, f"{name}-uploader")
 
         def read_namespaced_pod_log(
             self,
@@ -224,11 +235,12 @@ def test_stream_pod_logs_returns_text(auth_client):
     assert response.text == "line-1\nline-2\n"
     assert response.headers["content-type"].startswith("text/plain")
 
+    assert fake_core.pod_calls == [{"name": "pod-42", "namespace": "walkai"}]
     assert fake_core.calls == [
         {
             "name": "pod-42",
             "namespace": "walkai",
-            "container": None,
+            "container": "pod-42",
             "follow": True,
             "tail_lines": 200,
             "timestamps": True,
@@ -241,6 +253,9 @@ def test_stream_pod_logs_propagates_not_found(auth_client):
     client, _ = auth_client
 
     class FakeCore:
+        def read_namespaced_pod(self, *, name: str, namespace: str):  # noqa: ARG002
+            return _fake_pod(name, f"{name}-uploader")
+
         def read_namespaced_pod_log(self, *_, **__):
             raise ApiException(status=404)
 

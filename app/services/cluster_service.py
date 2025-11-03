@@ -109,11 +109,40 @@ def stream_pod_logs(
 ) -> Iterable[str]:
     """Stream logs from a Kubernetes pod, decoding into UTF-8 text chunks."""
 
+    resolved_container = container
+
+    if resolved_container is None:
+        try:
+            pod = core.read_namespaced_pod(name=pod_name, namespace=namespace)
+        except ApiException:  # pragma: no cover - best effort helper
+            pod = None
+        except Exception:  # pragma: no cover - guard against unexpected errors
+            pod = None
+
+        if pod is not None:
+            spec = getattr(pod, "spec", None)
+            containers = getattr(spec, "containers", None) if spec else None
+
+            if containers:
+                container_names = [
+                    getattr(candidate, "name", None)
+                    for candidate in containers
+                    if getattr(candidate, "name", None)
+                ]
+
+                if container_names:
+                    for name in container_names:
+                        if not name.endswith("-uploader"):
+                            resolved_container = name
+                            break
+                    else:
+                        resolved_container = container_names[0]
+
     try:
         response = core.read_namespaced_pod_log(
             name=pod_name,
             namespace=namespace,
-            container=container,
+            container=resolved_container,
             follow=follow,
             tail_lines=tail_lines,
             timestamps=timestamps,
