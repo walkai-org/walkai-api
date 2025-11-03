@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 
 from kubernetes.client import ApiException
 
+from app.core.aws import get_ddb_cluster_cache_table
 from app.core.k8s import get_core
-from app.core.redis import get_redis
 from app.main import app
 from app.models.jobs import Job, JobRun, RunStatus, Volume
 from app.schemas.cluster import ClusterInsightsIn, GPUResources, Pod, PodStatus
@@ -12,15 +12,19 @@ from app.schemas.jobs import GPUProfile
 from app.services import cluster_service
 
 
-class FakeRedis:
+class FakeDynamoTable:
     def __init__(self) -> None:
-        self.store: dict[str, str] = {}
+        self.items: dict[str, dict] = {}
 
-    def set(self, key: str, value: str) -> None:
-        self.store[key] = value
+    def put_item(self, *, Item: dict, ConditionExpression=None) -> dict:  # noqa: ARG002
+        self.items[Item["pk"]] = Item
+        return {"ResponseMetadata": {"HTTPStatusCode": 200}}
 
-    def get(self, key: str) -> str | None:
-        return self.store.get(key)
+    def get_item(self, *, Key: dict, ConsistentRead=False) -> dict:  # noqa: ARG002
+        item = self.items.get(Key["pk"])
+        if item is None:
+            return {}
+        return {"Item": item}
 
 
 def _build_payload_json() -> dict:
@@ -48,19 +52,19 @@ def _build_payload_json() -> dict:
     }
 
 
-def test_submit_insights_endpoint_stores_snapshot_in_redis(auth_client):
+def test_submit_insights_endpoint_stores_snapshot_in_dynamodb(auth_client):
     client, _ = auth_client
-    fake_redis = FakeRedis()
-    app.dependency_overrides[get_redis] = lambda: fake_redis
+    fake_ddb = FakeDynamoTable()
+    app.dependency_overrides[get_ddb_cluster_cache_table] = lambda: fake_ddb
 
     payload = _build_payload_json()
     try:
         response = client.post("/cluster/insights", json=payload)
     finally:
-        app.dependency_overrides.pop(get_redis, None)
+        app.dependency_overrides.pop(get_ddb_cluster_cache_table, None)
 
     assert response.status_code == 204
-    stored = fake_redis.store[cluster_service.INSIGHTS_KEY]
+    stored = fake_ddb.items[cluster_service.INSIGHTS_PK]["data"]
     parsed = json.loads(stored)
     assert parsed["ts"] == payload["ts"]
     assert parsed["gpus"] == payload["gpus"]
@@ -68,7 +72,7 @@ def test_submit_insights_endpoint_stores_snapshot_in_redis(auth_client):
 
 
 def test_save_and_load_cluster_insights_roundtrip(db_session):
-    fake_redis = FakeRedis()
+    fake_ddb = FakeDynamoTable()
     payload = ClusterInsightsIn(
         ts=datetime.now(UTC),
         gpus=[
@@ -86,13 +90,13 @@ def test_save_and_load_cluster_insights_roundtrip(db_session):
         ],
     )
 
-    cluster_service.save_cluster_insights(fake_redis, payload, db_session)
-    snapshot = cluster_service.load_cluster_insights(fake_redis)
+    cluster_service.save_cluster_insights(fake_ddb, payload, db_session)
+    snapshot = cluster_service.load_cluster_insights(fake_ddb)
 
     assert snapshot == payload
 
 
-def _store_snapshot(redis_client: FakeRedis) -> ClusterInsightsIn:
+def _store_snapshot(ddb_table: FakeDynamoTable) -> ClusterInsightsIn:
     snapshot = ClusterInsightsIn(
         ts=datetime.now(UTC),
         gpus=[
@@ -118,20 +122,26 @@ def _store_snapshot(redis_client: FakeRedis) -> ClusterInsightsIn:
             ),
         ],
     )
-    redis_client.set(cluster_service.INSIGHTS_KEY, snapshot.model_dump_json())
+    ddb_table.put_item(
+        Item={
+            "pk": cluster_service.INSIGHTS_PK,
+            "data": snapshot.model_dump_json(),
+            "updated_at": int(datetime.now(UTC).timestamp()),
+        }
+    )
     return snapshot
 
 
 def test_get_resources_returns_latest_snapshot(auth_client):
     client, _ = auth_client
-    fake_redis = FakeRedis()
-    snapshot = _store_snapshot(fake_redis)
-    app.dependency_overrides[get_redis] = lambda: fake_redis
+    fake_ddb = FakeDynamoTable()
+    snapshot = _store_snapshot(fake_ddb)
+    app.dependency_overrides[get_ddb_cluster_cache_table] = lambda: fake_ddb
 
     try:
         response = client.get("/cluster/resources")
     finally:
-        app.dependency_overrides.pop(get_redis, None)
+        app.dependency_overrides.pop(get_ddb_cluster_cache_table, None)
 
     assert response.status_code == 200
     assert response.json() == [
@@ -146,13 +156,13 @@ def test_get_resources_returns_latest_snapshot(auth_client):
 
 def test_get_pods_returns_404_without_snapshot(auth_client):
     client, _ = auth_client
-    fake_redis = FakeRedis()
-    app.dependency_overrides[get_redis] = lambda: fake_redis
+    fake_ddb = FakeDynamoTable()
+    app.dependency_overrides[get_ddb_cluster_cache_table] = lambda: fake_ddb
 
     try:
         response = client.get("/cluster/pods")
     finally:
-        app.dependency_overrides.pop(get_redis, None)
+        app.dependency_overrides.pop(get_ddb_cluster_cache_table, None)
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Cluster insights not available"
@@ -254,7 +264,7 @@ def _as_naive_utc(dt: datetime | None) -> datetime | None:
 
 
 def test_save_cluster_insights_updates_job_runs(db_session, test_user):
-    fake_redis = FakeRedis()
+    fake_ddb = FakeDynamoTable()
 
     job = Job(
         image="repo/image:1.0",
@@ -314,7 +324,7 @@ def test_save_cluster_insights_updates_job_runs(db_session, test_user):
         ],
     )
 
-    cluster_service.save_cluster_insights(fake_redis, payload, db_session)
+    cluster_service.save_cluster_insights(fake_ddb, payload, db_session)
 
     db_session.refresh(first_run)
     db_session.refresh(second_run)

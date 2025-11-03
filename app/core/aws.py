@@ -57,6 +57,9 @@ def presign_put_url(s3_client: BaseClient, key: str, expires: int = 3600) -> str
 def _ensure_table_pk_only(
     ddb_resource, table_name: str, pk_name: str = "pk", pk_type: str = "S"
 ):
+    if settings.app_env == "test":
+        return ddb_resource.Table(table_name)
+
     client = ddb_resource.meta.client
     try:
         client.describe_table(TableName=table_name)
@@ -84,7 +87,7 @@ def create_ddb_oauth_table():
     if settings.ddb_endpoint:
         logger.info(f"Creating dynamo table {settings.ddb_table_oauth}")
         return _ensure_table_pk_only(
-            dynamodb, settings.ddb_table_cluster_cache, pk_name="pk", pk_type="S"
+            dynamodb, settings.ddb_table_oauth, pk_name="pk", pk_type="S"
         )
 
     return dynamodb.Table(settings.ddb_table_oauth)  # type: ignore
