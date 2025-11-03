@@ -62,7 +62,11 @@ def presign_output_object(
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
     s3_prefix = f"users/{job.created_by_id}/jobs/{job_id}/{run_id}/outputs"
+    volume = run.output_volume
+    volume.key_prefix = s3_prefix
+    db.commit()
 
     key = f"{s3_prefix.rstrip('/')}/{path.lstrip('/')}"
+
     url = presign_put_url(s3_client, key)
     return {"url": url}

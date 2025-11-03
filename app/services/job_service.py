@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
-from app.models.jobs import Job, JobRun, RunStatus, Volume, VolumeState
+from app.models.jobs import Job, JobRun, RunStatus, Volume
 from app.models.users import User
 from app.schemas.jobs import JobCreate
 
@@ -96,6 +96,29 @@ def _render_job_manifest(
         done
 
         echo "Contenedor ${MAIN} terminó con exitCode=${exit_code}"
+        LOG_FILE="$(mktemp)"
+        LOG_ENDPOINT="${POD_URL}/log?container=${MAIN}&timestamps=true"
+
+        echo "Descargando logs del contenedor ${MAIN}..."
+        if curl -fsS --cacert "${CA_CERT}" \
+            -H "Authorization: Bearer ${SA_TOKEN}" \
+            "${LOG_ENDPOINT}" > "${LOG_FILE}"
+        then
+            LOG_PATH="logs/${MAIN}.log"
+            PRES="$(curl -fsSL -H "X-Run-Token: ${RUN_TOKEN}" \
+                    --get --data-urlencode "path=${LOG_PATH}" \
+                    "${PRESIGN_ENDPOINT}")"
+
+            URL="$(printf '%s' "$PRES" | jq -r '.url // empty')"
+            [ -n "$URL" ] || { echo "ERROR: presign no devolvió URL para logs"; rm -f "${LOG_FILE}"; exit 2; }
+
+            curl -f -X PUT --upload-file "${LOG_FILE}" "$URL"
+            echo "Logs subidos a ${LOG_PATH}"
+        else
+            echo "WARN: No se pudieron obtener logs del contenedor ${MAIN}"
+        fi
+
+        rm -f "${LOG_FILE}"
         if [ "$exit_code" != "0" ]; then
             echo "Main container falló; no se suben outputs. Abortando."
             exit 1
@@ -181,9 +204,7 @@ def apply_pvc(core: client.CoreV1Api, manifest: dict):
 
 def create_volume(db: Session, storage: int, is_input: bool) -> Volume:
     vol_name = str(uuid4())
-    vol = Volume(
-        pvc_name=vol_name, size=storage, state=VolumeState.pvc, is_input=is_input
-    )
+    vol = Volume(pvc_name=vol_name, size=storage, is_input=is_input)
 
     db.add(vol)
     db.flush()
