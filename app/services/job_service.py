@@ -1,13 +1,15 @@
 from collections.abc import Sequence
 from uuid import uuid4
 
+from botocore.client import BaseClient
+from botocore.exceptions import ClientError
 from fastapi import HTTPException
 from kubernetes import client, watch
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
-from app.models.jobs import Job, JobRun, RunStatus, Volume, VolumeState
+from app.models.jobs import Job, JobRun, RunStatus, Volume
 from app.models.users import User
 from app.schemas.jobs import JobCreate
 
@@ -96,6 +98,29 @@ def _render_job_manifest(
         done
 
         echo "Contenedor ${MAIN} terminó con exitCode=${exit_code}"
+        LOG_FILE="$(mktemp)"
+        LOG_ENDPOINT="${POD_URL}/log?container=${MAIN}&timestamps=true"
+
+        echo "Descargando logs del contenedor ${MAIN}..."
+        if curl -fsS --cacert "${CA_CERT}" \
+            -H "Authorization: Bearer ${SA_TOKEN}" \
+            "${LOG_ENDPOINT}" > "${LOG_FILE}"
+        then
+            LOG_PATH="logs/${MAIN}.log"
+            PRES="$(curl -fsSL -H "X-Run-Token: ${RUN_TOKEN}" \
+                    --get --data-urlencode "path=${LOG_PATH}" \
+                    "${PRESIGN_ENDPOINT}")"
+
+            URL="$(printf '%s' "$PRES" | jq -r '.url // empty')"
+            [ -n "$URL" ] || { echo "ERROR: presign no devolvió URL para logs"; rm -f "${LOG_FILE}"; exit 2; }
+
+            curl -f -X PUT --upload-file "${LOG_FILE}" "$URL"
+            echo "Logs subidos a ${LOG_PATH}"
+        else
+            echo "WARN: No se pudieron obtener logs del contenedor ${MAIN}"
+        fi
+
+        rm -f "${LOG_FILE}"
         if [ "$exit_code" != "0" ]; then
             echo "Main container falló; no se suben outputs. Abortando."
             exit 1
@@ -181,9 +206,7 @@ def apply_pvc(core: client.CoreV1Api, manifest: dict):
 
 def create_volume(db: Session, storage: int, is_input: bool) -> Volume:
     vol_name = str(uuid4())
-    vol = Volume(
-        pvc_name=vol_name, size=storage, state=VolumeState.pvc, is_input=is_input
-    )
+    vol = Volume(pvc_name=vol_name, size=storage, is_input=is_input)
 
     db.add(vol)
     db.flush()
@@ -300,3 +323,66 @@ def get_job(db: Session, job_id: int) -> Job:
     if result is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return result
+
+
+def get_job_run(db: Session, job_id: int, run_id: int) -> JobRun:
+    stmt = (
+        select(JobRun)
+        .options(
+            selectinload(JobRun.job),
+            selectinload(JobRun.output_volume),
+        )
+        .where(JobRun.id == run_id, JobRun.job_id == job_id)
+    )
+    result = db.execute(stmt).scalar_one_or_none()
+    if result is None:
+        raise HTTPException(status_code=404, detail="Job run not found")
+    return result
+
+
+def stream_job_run_logs(
+    s3_client: BaseClient,
+    job_run: JobRun,
+    *,
+    chunk_size: int = 4096,
+):
+    volume = job_run.output_volume
+    if volume is None:
+        raise HTTPException(status_code=404, detail="Run has no output volume")
+
+    prefix = volume.key_prefix
+    if not prefix:
+        raise HTTPException(status_code=404, detail="Volume has no s3 prefix")
+
+    key = f"{prefix.rstrip('/')}/logs/{job_run.k8s_job_name}.log"
+
+    try:
+        response = s3_client.get_object(
+            Bucket=settings.aws_s3_bucket,
+            Key=key,
+        )
+    except ClientError as exc:
+        error = exc.response.get("Error", {}) if hasattr(exc, "response") else {}
+        code = error.get("Code")
+        if code in {"NoSuchKey", "404", "NotFound"}:
+            raise HTTPException(status_code=404, detail="Log file not found") from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to retrieve logs from object storage",
+        ) from exc
+
+    body = response.get("Body")
+    if body is None:
+        return iter(())
+
+    def _iterator():
+        try:
+            while True:
+                chunk = body.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return _iterator()

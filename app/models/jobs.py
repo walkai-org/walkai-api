@@ -13,6 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.config import get_settings
 from app.core.database import Base
 from app.models.users import User
 from app.schemas.jobs import GPUProfile, RunStatus
@@ -41,19 +42,11 @@ class Volume(Base):
     size: Mapped[int]
     key_prefix: Mapped[str | None] = mapped_column(default=None)
     is_input: Mapped[bool] = mapped_column(default=False)
-    state: Mapped[VolumeState] = mapped_column(
-        Enum(VolumeState), default=VolumeState.pvc
-    )
 
-    # TODO:
-    # Optional: computed helpers (in Python model, not persisted)
-    # @property
-    # def s3_uri(self) -> str | None:
-    #     if self.state == VolumeState.archived_s3 and self.key_prefix:
-    #         # read from settings.BUCKET_NAME (and maybe REGION) at runtime
-    #         from app.config import settings
-    #         return f"s3://{settings.S3_BUCKET}/{self.key_prefix}"
-    #     return None
+    @property
+    def s3_uri(self) -> str | None:
+        settings = get_settings()
+        return f"s3://{settings.aws_s3_bucket}/{self.key_prefix}"
 
 
 class Job(Base):

@@ -1,5 +1,6 @@
 from botocore.client import BaseClient
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from kubernetes import client
 from sqlalchemy.orm import Session
 
@@ -62,7 +63,28 @@ def presign_output_object(
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
     s3_prefix = f"users/{job.created_by_id}/jobs/{job_id}/{run_id}/outputs"
+    volume = run.output_volume
+    volume.key_prefix = s3_prefix
+    db.commit()
 
     key = f"{s3_prefix.rstrip('/')}/{path.lstrip('/')}"
+
     url = presign_put_url(s3_client, key)
     return {"url": url}
+
+
+@router.get("/{job_id}/runs/{run_id}/logs")
+def get_job_run_logs(
+    job_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    s3_client: BaseClient = Depends(get_s3_client),
+    _: User = Depends(get_current_user),
+):
+    job_run = job_service.get_job_run(db, job_id, run_id)
+    job = job_run.job
+    if job is None:
+        raise HTTPException(status_code=502, detail="Job data missing for run")
+
+    log_stream = job_service.stream_job_run_logs(s3_client, job_run)
+    return StreamingResponse(log_stream, media_type="text/plain; charset=utf-8")
