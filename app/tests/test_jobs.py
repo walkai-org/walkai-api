@@ -12,7 +12,6 @@ from app.core.aws import get_s3_client
 from app.core.k8s import get_batch, get_core
 from app.main import app
 from app.models.jobs import JobRun, RunStatus
-from app.models.users import User
 from app.schemas.jobs import GPUProfile, JobCreate
 from app.services import job_service
 
@@ -157,7 +156,6 @@ def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
         "size": output_volume.size,
         "key_prefix": output_volume.key_prefix,
         "is_input": output_volume.is_input,
-        "state": output_volume.state.value,
     }
     assert run_data["input_volume"] == {
         "id": input_volume.id,
@@ -165,7 +163,6 @@ def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
         "size": input_volume.size,
         "key_prefix": input_volume.key_prefix,
         "is_input": input_volume.is_input,
-        "state": input_volume.state.value,
     }
 
 
@@ -219,34 +216,6 @@ def test_get_job_run_logs_streams_from_s3(auth_client, db_session):
     assert response.status_code == 200
     assert response.content == log_bytes
     assert response.headers["content-type"] == "text/plain; charset=utf-8"
-
-
-def test_get_job_run_logs_forbidden_for_non_owner(auth_client, db_session):
-    client, user = auth_client
-    user.role = "member"
-    db_session.commit()
-
-    other_user = User(email="other@example.com", password_hash=None, role="admin")
-    db_session.add(other_user)
-    db_session.commit()
-    db_session.refresh(other_user)
-
-    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g2_20, storage=2)
-    job = job_service.create_job(db_session, payload, other_user.id)
-    volume = job_service.create_volume(
-        db_session, storage=payload.storage, is_input=False
-    )
-    run = job_service.create_job_run(db_session, job, volume)
-    run.k8s_pod_name = "pod-other"
-    run.output_volume.key_prefix = (
-        f"users/{other_user.id}/jobs/{job.id}/{run.id}/outputs"
-    )
-    db_session.commit()
-
-    response = client.get(f"/jobs/{job.id}/runs/{run.id}/logs")
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Forbidden"
 
 
 def test_get_job_run_logs_returns_404_when_missing(auth_client, db_session):

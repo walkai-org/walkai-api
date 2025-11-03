@@ -49,7 +49,6 @@ class VolumeOut(BaseModel):
     size: int
     key_prefix: str | None
     is_input: bool
-    state: str
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from uuid import uuid4
 
 from botocore.client import BaseClient
@@ -325,6 +325,84 @@ def get_job(db: Session, job_id: int) -> Job:
     return result
 
 
+def _resolve_volume_prefix(volume: Volume) -> str:
+    prefix = volume.key_prefix
+    if prefix:
+        return prefix.rstrip("/")
+
+    raise HTTPException(
+        status_code=404, detail="Volume is not stored in object storage"
+    )
+
+
+def _resolve_output_prefix(job_run: JobRun) -> str:
+    volume = job_run.output_volume
+    if volume is None:
+        raise HTTPException(status_code=404, detail="Run has no output volume")
+
+    try:
+        return _resolve_volume_prefix(volume)
+    except HTTPException:
+        pass
+
+    job = job_run.job
+    if job is None:
+        raise HTTPException(status_code=502, detail="Job data missing for run")
+
+    return f"users/{job.created_by_id}/jobs/{job_run.job_id}/{job_run.id}/outputs"
+
+
+def _stream_s3_object(
+    s3_client: BaseClient,
+    *,
+    key: str,
+    not_found_detail: str,
+    chunk_size: int,
+):
+    try:
+        response = s3_client.get_object(
+            Bucket=settings.aws_s3_bucket,
+            Key=key,
+        )
+    except ClientError as exc:
+        error = exc.response.get("Error", {}) if hasattr(exc, "response") else {}
+        code = error.get("Code")
+        if code in {"NoSuchKey", "404", "NotFound"}:
+            raise HTTPException(status_code=404, detail=not_found_detail) from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to retrieve object from storage",
+        ) from exc
+
+    body = response.get("Body")
+    if body is None:
+        return iter(()), response
+
+    def _iterator() -> Iterable[bytes]:
+        try:
+            while True:
+                chunk = body.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return _iterator(), response
+
+
+def _normalize_relative_path(path: str) -> str:
+    candidate = path.strip().strip("/")
+    if not candidate:
+        raise HTTPException(status_code=400, detail="File path is required")
+
+    parts = candidate.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    return "/".join(parts)
+
+
 def get_job_run(db: Session, job_id: int, run_id: int) -> JobRun:
     stmt = (
         select(JobRun)
@@ -340,49 +418,120 @@ def get_job_run(db: Session, job_id: int, run_id: int) -> JobRun:
     return result
 
 
+def get_volume(db: Session, volume_id: int) -> Volume:
+    volume = db.get(Volume, volume_id)
+    if volume is None:
+        raise HTTPException(status_code=404, detail="Volume not found")
+    return volume
+
+
+def list_volume_objects(
+    s3_client: BaseClient,
+    volume: Volume,
+    *,
+    continuation_token: str | None = None,
+    max_keys: int | None = None,
+) -> dict[str, object]:
+    prefix = _resolve_volume_prefix(volume)
+    s3_prefix = prefix.rstrip("/") + "/"
+
+    kwargs: dict[str, object] = {
+        "Bucket": settings.aws_s3_bucket,
+        "Prefix": s3_prefix,
+        "Delimiter": "/",
+    }
+    if continuation_token:
+        kwargs["ContinuationToken"] = continuation_token
+    if max_keys is not None:
+        kwargs["MaxKeys"] = max_keys
+
+    try:
+        response = s3_client.list_objects_v2(**kwargs)
+    except ClientError as exc:
+        print(f"error {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to list objects from storage",
+        ) from exc
+
+    contents: list[dict[str, object]] = []
+    for item in response.get("Contents", []):
+        key = item.get("Key")
+        if not key or not key.startswith(s3_prefix):
+            continue
+        relative = key[len(s3_prefix) :]
+        if not relative:
+            continue
+        contents.append(
+            {
+                "key": relative,
+                "size": int(item.get("Size", 0)),
+                "last_modified": item.get("LastModified"),
+                "etag": item.get("ETag"),
+            }
+        )
+
+    directories: list[str] = []
+    for entry in response.get("CommonPrefixes", []):
+        value = entry.get("Prefix")
+        if not value or not value.startswith(s3_prefix):
+            continue
+        relative = value[len(s3_prefix) :]
+        if relative:
+            directories.append(relative)
+
+    return {
+        "prefix": prefix,
+        "objects": contents,
+        "directories": directories,
+        "truncated": bool(response.get("IsTruncated")),
+        "next_continuation_token": response.get("NextContinuationToken"),
+    }
+
+
 def stream_job_run_logs(
     s3_client: BaseClient,
     job_run: JobRun,
     *,
     chunk_size: int = 4096,
 ):
-    volume = job_run.output_volume
-    if volume is None:
-        raise HTTPException(status_code=404, detail="Run has no output volume")
+    if not job_run.k8s_job_name:
+        raise HTTPException(status_code=404, detail="Log file not available")
 
-    prefix = volume.key_prefix
-    if not prefix:
-        raise HTTPException(status_code=404, detail="Volume has no s3 prefix")
+    prefix = _resolve_output_prefix(job_run)
+    key = f"{prefix}/logs/{job_run.k8s_job_name}.log"
 
-    key = f"{prefix.rstrip('/')}/logs/{job_run.k8s_job_name}.log"
+    iterator, _ = _stream_s3_object(
+        s3_client,
+        key=key,
+        not_found_detail="Log file not found",
+        chunk_size=chunk_size,
+    )
+    return iterator
 
-    try:
-        response = s3_client.get_object(
-            Bucket=settings.aws_s3_bucket,
-            Key=key,
-        )
-    except ClientError as exc:
-        error = exc.response.get("Error", {}) if hasattr(exc, "response") else {}
-        code = error.get("Code")
-        if code in {"NoSuchKey", "404", "NotFound"}:
-            raise HTTPException(status_code=404, detail="Log file not found") from exc
-        raise HTTPException(
-            status_code=502,
-            detail="Failed to retrieve logs from object storage",
-        ) from exc
 
-    body = response.get("Body")
-    if body is None:
-        return iter(())
+def stream_volume_file(
+    s3_client: BaseClient,
+    volume: Volume,
+    path: str,
+    *,
+    chunk_size: int = 4096,
+):
+    normalized_path = _normalize_relative_path(path)
+    prefix = _resolve_volume_prefix(volume)
+    key = f"{prefix}/{normalized_path}"
 
-    def _iterator():
-        try:
-            while True:
-                chunk = body.read(chunk_size)
-                if not chunk:
-                    break
-                yield chunk
-        finally:
-            body.close()
+    iterator, response = _stream_s3_object(
+        s3_client,
+        key=key,
+        not_found_detail="File not found",
+        chunk_size=chunk_size,
+    )
 
-    return _iterator()
+    metadata = {
+        "path": normalized_path,
+        "content_type": response.get("ContentType"),
+        "content_length": response.get("ContentLength"),
+        "etag": response.get("ETag"),
+    }
+    return iterator, metadata
