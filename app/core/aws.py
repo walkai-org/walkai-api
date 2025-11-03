@@ -1,5 +1,3 @@
-import logging
-
 import boto3
 from boto3.session import Session
 from botocore.client import BaseClient
@@ -9,8 +7,6 @@ from fastapi import Request
 from app.core.config import get_settings
 
 settings = get_settings()
-
-logger = logging.getLogger(__name__)
 
 
 def _build_session() -> Session:
@@ -77,7 +73,6 @@ def _build_dynamodb_resource():
     session = _build_session()
     endpoint: str | None = settings.ddb_endpoint
     if endpoint:
-        logger.info(f"Creating dynamodb with endpoint {endpoint}")
         return session.resource("dynamodb", endpoint_url=endpoint)
     return session.resource("dynamodb")
 
@@ -85,7 +80,6 @@ def _build_dynamodb_resource():
 def create_ddb_oauth_table():
     dynamodb = _build_dynamodb_resource()
     if settings.ddb_endpoint:
-        logger.info(f"Creating dynamo table {settings.ddb_table_oauth}")
         return _ensure_table_pk_only(
             dynamodb, settings.ddb_table_oauth, pk_name="pk", pk_type="S"
         )
@@ -96,7 +90,6 @@ def create_ddb_oauth_table():
 def create_ddb_cluster_cache_table():
     dynamodb = _build_dynamodb_resource()
     if settings.ddb_endpoint:
-        logger.info(f"Creating dynamo table {settings.ddb_table_cluster_cache}")
         return _ensure_table_pk_only(
             dynamodb, settings.ddb_table_cluster_cache, pk_name="pk", pk_type="S"
         )

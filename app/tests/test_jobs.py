@@ -1,12 +1,18 @@
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from types import SimpleNamespace
 
+import boto3
 import pytest
+from botocore.response import StreamingBody
+from botocore.stub import Stubber
 from sqlalchemy.exc import IntegrityError
 
+from app.core.aws import get_s3_client
 from app.core.k8s import get_batch, get_core
 from app.main import app
 from app.models.jobs import JobRun, RunStatus
+from app.models.users import User
 from app.schemas.jobs import GPUProfile, JobCreate
 from app.services import job_service
 
@@ -170,6 +176,120 @@ def test_get_job_detail_not_found(auth_client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Job 9999 not found"
+
+
+def test_get_job_run_logs_streams_from_s3(auth_client, db_session):
+    client, user = auth_client
+
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, user.id)
+    volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, volume)
+    run.k8s_pod_name = "pod-logs"
+    prefix = f"users/{user.id}/jobs/{job.id}/{run.id}/outputs"
+    run.output_volume.key_prefix = prefix
+    db_session.commit()
+
+    log_key = f"{prefix}/logs/{run.k8s_job_name}.log"
+    log_bytes = b"line-1\nline-2\n"
+    s3_client = boto3.client(
+        "s3",
+        region_name="us-test-1",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    stubber = Stubber(s3_client)
+    stubber.add_response(
+        "get_object",
+        {"Body": StreamingBody(BytesIO(log_bytes), len(log_bytes))},
+        {"Bucket": "test-bucket", "Key": log_key},
+    )
+    stubber.activate()
+
+    app.dependency_overrides[get_s3_client] = lambda: s3_client
+    try:
+        response = client.get(f"/jobs/{job.id}/runs/{run.id}/logs")
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+        stubber.assert_no_pending_responses()
+        stubber.deactivate()
+
+    assert response.status_code == 200
+    assert response.content == log_bytes
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+
+
+def test_get_job_run_logs_forbidden_for_non_owner(auth_client, db_session):
+    client, user = auth_client
+    user.role = "member"
+    db_session.commit()
+
+    other_user = User(email="other@example.com", password_hash=None, role="admin")
+    db_session.add(other_user)
+    db_session.commit()
+    db_session.refresh(other_user)
+
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g2_20, storage=2)
+    job = job_service.create_job(db_session, payload, other_user.id)
+    volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, volume)
+    run.k8s_pod_name = "pod-other"
+    run.output_volume.key_prefix = (
+        f"users/{other_user.id}/jobs/{job.id}/{run.id}/outputs"
+    )
+    db_session.commit()
+
+    response = client.get(f"/jobs/{job.id}/runs/{run.id}/logs")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden"
+
+
+def test_get_job_run_logs_returns_404_when_missing(auth_client, db_session):
+    client, user = auth_client
+
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, user.id)
+    volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, volume)
+    run.k8s_pod_name = "pod-missing"
+    prefix = f"users/{user.id}/jobs/{job.id}/{run.id}/outputs"
+    run.output_volume.key_prefix = prefix
+    db_session.commit()
+
+    log_key = f"{prefix}/logs/{run.k8s_job_name}.log"
+    s3_client = boto3.client(
+        "s3",
+        region_name="us-test-1",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    stubber = Stubber(s3_client)
+    stubber.add_client_error(
+        "get_object",
+        service_error_code="NoSuchKey",
+        service_message="Not found",
+        http_status_code=404,
+        expected_params={"Bucket": "test-bucket", "Key": log_key},
+    )
+    stubber.activate()
+
+    app.dependency_overrides[get_s3_client] = lambda: s3_client
+    try:
+        response = client.get(f"/jobs/{job.id}/runs/{run.id}/logs")
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+        stubber.assert_no_pending_responses()
+        stubber.deactivate()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Log file not found"
 
 
 def test_render_pvc_manifest_shapes_storage():
