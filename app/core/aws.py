@@ -1,3 +1,5 @@
+import logging
+
 import boto3
 from boto3.session import Session
 from botocore.client import BaseClient
@@ -7,6 +9,8 @@ from fastapi import Request
 from app.core.config import get_settings
 
 settings = get_settings()
+
+logger = logging.getLogger(__name__)
 
 
 def _build_session() -> Session:
@@ -50,19 +54,50 @@ def presign_put_url(s3_client: BaseClient, key: str, expires: int = 3600) -> str
     )
 
 
+def _ensure_table_pk_only(
+    ddb_resource, table_name: str, pk_name: str = "pk", pk_type: str = "S"
+):
+    client = ddb_resource.meta.client
+    try:
+        client.describe_table(TableName=table_name)
+    except client.exceptions.ResourceNotFoundException:
+        ddb_resource.create_table(
+            TableName=table_name,
+            AttributeDefinitions=[{"AttributeName": pk_name, "AttributeType": pk_type}],
+            KeySchema=[{"AttributeName": pk_name, "KeyType": "HASH"}],
+            BillingMode="PAY_PER_REQUEST",
+        ).wait_until_exists()
+    return ddb_resource.Table(table_name)
+
+
 def _build_dynamodb_resource():
     session = _build_session()
+    endpoint: str | None = settings.ddb_endpoint
+    if endpoint:
+        logger.info(f"Creating dynamodb with endpoint {endpoint}")
+        return session.resource("dynamodb", endpoint_url=endpoint)
     return session.resource("dynamodb")
 
 
 def create_ddb_oauth_table():
     dynamodb = _build_dynamodb_resource()
-    return dynamodb.Table(settings.ddb_table_oauth)
+    if settings.ddb_endpoint:
+        logger.info(f"Creating dynamo table {settings.ddb_table_oauth}")
+        return _ensure_table_pk_only(
+            dynamodb, settings.ddb_table_cluster_cache, pk_name="pk", pk_type="S"
+        )
+
+    return dynamodb.Table(settings.ddb_table_oauth)  # type: ignore
 
 
 def create_ddb_cluster_cache_table():
     dynamodb = _build_dynamodb_resource()
-    return dynamodb.Table(settings.ddb_table_cluster_cache)
+    if settings.ddb_endpoint:
+        logger.info(f"Creating dynamo table {settings.ddb_table_cluster_cache}")
+        return _ensure_table_pk_only(
+            dynamodb, settings.ddb_table_cluster_cache, pk_name="pk", pk_type="S"
+        )
+    return dynamodb.Table(settings.ddb_table_cluster_cache)  # type: ignore
 
 
 def get_ddb_oauth_table(request: Request):

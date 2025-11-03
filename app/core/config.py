@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     ecr_arn: str = Field(alias="ECR_ARN")
     ddb_table_oauth: str = Field(alias="DYNAMODB_OAUTH_TABLE")
     ddb_table_cluster_cache: str = Field(alias="DYNAMODB_CLUSTER_CACHE_TABLE")
+    ddb_endpoint: str | None = Field(default=None, alias="DYNAMODB_ENDPOINT")
 
 
 @lru_cache
