@@ -5,11 +5,10 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("JWT_ALGO", "HS256")
 os.environ.setdefault("ACCESS_MIN", "15")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("CLUSTER_TOKEN", "test-cluster-token")
 os.environ.setdefault("CLUSTER_URL", "https://cluster.local")
 os.environ.setdefault("API_BASE_URL", "https://api.local")
-os.environ.setdefault("AWS_ACCES_KEY_ID", "test-access-key")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "test-access-key")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test-secret-key")
 os.environ.setdefault("AWS_REGION", "us-test-1")
 os.environ.setdefault("AWS_S3_BUCKET", "test-bucket")
@@ -17,6 +16,8 @@ os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://test:test@localhost:5432/testdb"
 )
 os.environ.setdefault("ECR_ARN", "arn:aws:ecr:us-test-1:123456789012:repository/test")
+os.environ.setdefault("DYNAMODB_OAUTH_TABLE", "walkai-test-oauth")
+os.environ.setdefault("DYNAMODB_CLUSTER_CACHE_TABLE", "walkai-test-cluster-cache")
 
 import pytest
 from fastapi.testclient import TestClient
