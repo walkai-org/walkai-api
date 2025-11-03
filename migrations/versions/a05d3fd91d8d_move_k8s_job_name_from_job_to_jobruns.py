@@ -5,8 +5,6 @@ Revises: 0001_initial_schema
 Create Date: 2025-10-29 21:13:41.475648
 """
 
-from __future__ import annotations
-
 import sqlalchemy as sa
 from alembic import op
 

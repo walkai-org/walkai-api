@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api import cluster, jobs, tokens
+from app.api import cluster, jobs, tokens, volumes
 from app.api.deps import get_current_user, require_admin
 from app.core.aws import get_ddb_oauth_table, get_ecr_client
 from app.core.config import get_settings, lifespan
@@ -81,6 +81,7 @@ app.add_middleware(
 
 app.include_router(cluster.router)
 app.include_router(jobs.router)
+app.include_router(volumes.router)
 app.include_router(tokens.router)
 
 
