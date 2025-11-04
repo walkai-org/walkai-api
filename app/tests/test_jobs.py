@@ -124,7 +124,7 @@ def test_list_jobs_picks_run_with_latest_started_time(auth_client, db_session):
     assert latest_run["id"] == later_run.id
 
 
-def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
+def test_get_job_detail_returns_runs_without_volume_data(auth_client, db_session):
     client, user = auth_client
     payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g3_40, storage=8)
     job = job_service.create_job(db_session, payload, user.id)
@@ -148,6 +148,42 @@ def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
     run_data = data["runs"][0]
     assert run_data["id"] == run.id
     assert run_data["status"] == run.status.value
+    assert run_data["k8s_pod_name"] == run.k8s_pod_name
+    assert run.output_volume_id == output_volume.id
+    assert run.input_volume_id == input_volume.id
+    assert "k8s_job_name" not in run_data
+    assert "output_volume" not in run_data
+    assert "input_volume" not in run_data
+
+
+def test_get_job_detail_not_found(auth_client):
+    client, _ = auth_client
+
+    response = client.get("/jobs/9999")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job 9999 not found"
+
+
+def test_get_job_run_detail_includes_volume_information(auth_client, db_session):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g3_40, storage=8)
+    job = job_service.create_job(db_session, payload, user.id)
+    output_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, output_volume)
+    run.k8s_pod_name = "pod-run-detail"
+    input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
+    run.input_volume_id = input_volume.id
+    db_session.commit()
+
+    response = client.get(f"/jobs/{job.id}/runs/{run.id}")
+
+    assert response.status_code == 200
+    run_data = response.json()
+    assert run_data["id"] == run.id
+    assert run_data["status"] == run.status.value
     assert run_data["k8s_job_name"] == run.k8s_job_name
     assert run_data["k8s_pod_name"] == run.k8s_pod_name
     assert run_data["output_volume"] == {
@@ -164,15 +200,6 @@ def test_get_job_detail_returns_runs_and_volumes(auth_client, db_session):
         "key_prefix": input_volume.key_prefix,
         "is_input": input_volume.is_input,
     }
-
-
-def test_get_job_detail_not_found(auth_client):
-    client, _ = auth_client
-
-    response = client.get("/jobs/9999")
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Job 9999 not found"
 
 
 def test_get_job_run_logs_streams_from_s3(auth_client, db_session):

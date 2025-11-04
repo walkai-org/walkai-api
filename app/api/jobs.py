@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.core.k8s import get_batch, get_core
 from app.models.jobs import Job, JobRun
 from app.models.users import User
-from app.schemas.jobs import JobCreate, JobDetailOut, JobOut, JobRunOut
+from app.schemas.jobs import JobCreate, JobDetailOut, JobOut, JobRunDetail, JobRunOut
 from app.services import job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -43,6 +43,16 @@ def get_job_detail(
     _: User = Depends(get_current_user),
 ):
     return job_service.get_job(db, job_id)
+
+
+@router.get("/{job_id}/runs/{run_id}", response_model=JobRunDetail)
+def get_job_run_detail(
+    job_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return job_service.get_job_run(db, job_id, run_id)
 
 
 @router.get("/{job_id}/runs/{run_id}/presign")

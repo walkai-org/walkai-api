@@ -314,8 +314,7 @@ def get_job(db: Session, job_id: int) -> Job:
     stmt = (
         select(Job)
         .options(
-            selectinload(Job.runs).selectinload(JobRun.output_volume),
-            selectinload(Job.runs).selectinload(JobRun.input_volume),
+            selectinload(Job.runs),
         )
         .where(Job.id == job_id)
     )
@@ -409,6 +408,7 @@ def get_job_run(db: Session, job_id: int, run_id: int) -> JobRun:
         .options(
             selectinload(JobRun.job),
             selectinload(JobRun.output_volume),
+            selectinload(JobRun.input_volume),
         )
         .where(JobRun.id == run_id, JobRun.job_id == job_id)
     )
