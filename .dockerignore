@@ -33,3 +33,4 @@ tests/
 example.env
 .env.example
 data/
+.env

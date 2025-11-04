@@ -71,6 +71,8 @@ app = FastAPI(title="walk:ai API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://walkaiorg.app",
+        "https://www.walkaiorg.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
@@ -153,7 +155,7 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
         key="access_token",
         value=access,
         httponly=True,
-        secure=False,
+        secure=True,
         samesite="lax",
         max_age=settings.access_min * 60,
         path="/",
@@ -377,7 +379,7 @@ def github_callback(
         "access_token",
         access,
         httponly=True,
-        secure=False,
+        secure=True,
         samesite="Lax",
         max_age=settings.access_min * 60,
         path="/",
