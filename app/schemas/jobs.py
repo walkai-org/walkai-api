@@ -32,15 +32,18 @@ class JobRunOut(BaseModel):
     pod: str
 
 
-class JobRunSummary(BaseModel):
+class JobRunBase(BaseModel):
     id: int
     status: RunStatus
-    k8s_job_name: str
-    k8s_pod_name: str
+    k8s_pod_name: str | None
     started_at: datetime | None
     finished_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class JobRunSummary(JobRunBase):
+    k8s_job_name: str
 
 
 class VolumeOut(BaseModel):
@@ -77,6 +80,6 @@ class JobDetailOut(BaseModel):
     gpu_profile: GPUProfile
     submitted_at: datetime
     created_by_id: int
-    runs: list[JobRunDetail]
+    runs: list[JobRunBase]
 
     model_config = ConfigDict(from_attributes=True)
