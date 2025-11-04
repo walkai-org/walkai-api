@@ -13,7 +13,6 @@ class VolumeObject(BaseModel):
 class VolumeListingOut(BaseModel):
     prefix: str
     objects: list[VolumeObject]
-    directories: list[str]
     truncated: bool
     next_continuation_token: str | None = None
 

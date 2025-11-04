@@ -57,7 +57,7 @@ def test_list_volume_objects_returns_files(auth_client, db_session):
     stubber.add_response(
         "list_objects_v2",
         response,
-        {"Bucket": "test-bucket", "Prefix": f"{prefix}/", "Delimiter": "/"},
+        {"Bucket": "test-bucket", "Prefix": f"{prefix}/"},
     )
     stubber.activate()
 
@@ -72,7 +72,7 @@ def test_list_volume_objects_returns_files(auth_client, db_session):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["prefix"] == prefix
-    assert payload["directories"] == ["results/"]
+    assert payload["directories"] == ["logs/", "results/"]
     assert payload["truncated"] is False
     assert payload["next_continuation_token"] is None
     objects = payload["objects"]
@@ -103,7 +103,7 @@ def test_list_volume_objects_handles_empty(auth_client, db_session):
             "Prefix": f"{prefix}/",
             "MaxKeys": 1000,
         },
-        {"Bucket": "test-bucket", "Prefix": f"{prefix}/", "Delimiter": "/"},
+        {"Bucket": "test-bucket", "Prefix": f"{prefix}/"},
     )
     stubber.activate()
 
@@ -120,6 +120,54 @@ def test_list_volume_objects_handles_empty(auth_client, db_session):
     assert payload["objects"] == []
     assert payload["directories"] == []
     assert payload["truncated"] is False
+
+
+def test_list_volume_objects_lists_nested_directories(auth_client, db_session):
+    client, _ = auth_client
+    prefix = "users/12/jobs/24/36/outputs"
+    volume = _create_volume_with_prefix(db_session, prefix=prefix)
+
+    s3_client = boto3.client(
+        "s3",
+        region_name="us-test-1",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    stubber = Stubber(s3_client)
+    response = {
+        "IsTruncated": False,
+        "KeyCount": 1,
+        "Contents": [
+            {
+                "Key": f"{prefix}/artifacts/nested/item.txt",
+                "Size": 16,
+                "LastModified": datetime(2024, 2, 2, tzinfo=UTC),
+                "ETag": '"etag-nested"',
+            }
+        ],
+        "Name": "test-bucket",
+        "Prefix": f"{prefix}/",
+        "MaxKeys": 1000,
+    }
+    stubber.add_response(
+        "list_objects_v2",
+        response,
+        {"Bucket": "test-bucket", "Prefix": f"{prefix}/"},
+    )
+    stubber.activate()
+
+    app.dependency_overrides[get_s3_client] = lambda: s3_client
+    try:
+        resp = client.get(f"/volumes/{volume.id}/objects")
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+        stubber.assert_no_pending_responses()
+        stubber.deactivate()
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["objects"][0]["key"] == "artifacts/nested/item.txt"
+    assert payload["directories"] == ["artifacts/", "artifacts/nested/"]
 
 
 def test_list_volume_objects_requires_prefix(auth_client, db_session):
