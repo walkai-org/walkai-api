@@ -438,7 +438,6 @@ def list_volume_objects(
     kwargs: dict[str, object] = {
         "Bucket": settings.aws_s3_bucket,
         "Prefix": s3_prefix,
-        "Delimiter": "/",
     }
     if continuation_token:
         kwargs["ContinuationToken"] = continuation_token
@@ -455,6 +454,7 @@ def list_volume_objects(
         ) from exc
 
     contents: list[dict[str, object]] = []
+    directories_set: set[str] = set()
     for item in response.get("Contents", []):
         key = item.get("Key")
         if not key or not key.startswith(s3_prefix):
@@ -471,19 +471,14 @@ def list_volume_objects(
             }
         )
 
-    directories: list[str] = []
-    for entry in response.get("CommonPrefixes", []):
-        value = entry.get("Prefix")
-        if not value or not value.startswith(s3_prefix):
-            continue
-        relative = value[len(s3_prefix) :]
-        if relative:
-            directories.append(relative)
+        parts = relative.split("/")
+        if len(parts) > 1:
+            for index in range(len(parts) - 1):
+                directories_set.add("/".join(parts[: index + 1]) + "/")
 
     return {
         "prefix": prefix,
         "objects": contents,
-        "directories": directories,
         "truncated": bool(response.get("IsTruncated")),
         "next_continuation_token": response.get("NextContinuationToken"),
     }
