@@ -226,13 +226,52 @@ def _decode_registry_token(token: str) -> tuple[str, str]:
             detail="ECR authorization token is invalid",
         ) from exc
 
-    username, password = decoded.split(":")
-    if not username or not password:
+    username, separator, password = decoded.partition(":")
+    if not separator or not username or not password:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="ECR authorization token is malformed",
         )
     return username, password
+
+
+def set_registry_secret_owner(
+    core: client.CoreV1Api,
+    *,
+    secret_name: str,
+    job_manifest: dict[str, object],
+    job_resource,
+):
+    metadata = getattr(job_resource, "metadata", None)
+    job_uid = getattr(metadata, "uid", None) if metadata else None
+    job_name = getattr(metadata, "name", None) if metadata else None
+    manifest_metadata = job_manifest.get("metadata", {})
+    if not isinstance(manifest_metadata, dict):
+        manifest_metadata = {}
+    if job_name is None:
+        job_name = manifest_metadata.get("name")
+
+    if not job_uid or not job_name:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Job metadata missing for registry secret owner reference",
+        )
+
+    owner_reference = {
+        "apiVersion": job_manifest.get("apiVersion", "batch/v1"),
+        "kind": job_manifest.get("kind", "Job"),
+        "name": job_name,
+        "uid": job_uid,
+        "controller": True,
+        "blockOwnerDeletion": False,
+    }
+
+    body = {"metadata": {"ownerReferences": [owner_reference]}}
+    return core.patch_namespaced_secret(
+        name=secret_name,
+        namespace=settings.namespace,
+        body=body,
+    )
 
 
 def _render_registry_secret(
@@ -384,7 +423,13 @@ def create_and_run_job(
     )
     apply_registry_secret(core, registry_secret_manifest)
     apply_pvc(core, output_pvc_manifest)
-    apply_job(batch, job_manifest)
+    job_resource = apply_job(batch, job_manifest)
+    set_registry_secret_owner(
+        core,
+        secret_name=registry_secret_name,
+        job_manifest=job_manifest,
+        job_resource=job_resource,
+    )
 
     pod = wait_for_first_pod_of_job(core, job_run.k8s_job_name)
     if not pod:

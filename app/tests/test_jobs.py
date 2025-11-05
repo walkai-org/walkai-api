@@ -470,15 +470,27 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
 
     def fake_apply_job(batch, manifest):
         captured["job"] = (batch, manifest)
+        return SimpleNamespace(
+            metadata=SimpleNamespace(name=manifest["metadata"]["name"], uid="job-uid")
+        )
 
     def fake_apply_secret(core, manifest):
         captured["secret"] = (core, manifest)
+
+    def fake_set_secret_owner(core, *, secret_name, job_manifest, job_resource):
+        captured["secret_owner"] = (
+            core,
+            secret_name,
+            job_manifest,
+            job_resource,
+        )
 
     pod = SimpleNamespace(metadata=SimpleNamespace(name="pod-xyz"))
 
     monkeypatch.setattr(job_service, "apply_pvc", fake_apply_pvc)
     monkeypatch.setattr(job_service, "apply_job", fake_apply_job)
     monkeypatch.setattr(job_service, "apply_registry_secret", fake_apply_secret)
+    monkeypatch.setattr(job_service, "set_registry_secret_owner", fake_set_secret_owner)
     monkeypatch.setattr(job_service, "wait_for_first_pod_of_job", lambda *a, **k: pod)
 
     job_run = job_service.create_and_run_job(
@@ -493,6 +505,10 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
     assert captured["secret"][0] is fake_core
     assert captured["pvc"][1]["metadata"]["name"] == job_run.output_volume.pvc_name
     assert captured["job"][1]["metadata"]["name"] == job_run.k8s_job_name
+    assert captured["secret_owner"][0] is fake_core
+    assert captured["secret_owner"][1] == f"{job_run.k8s_job_name}-registry"
+    owner_job = captured["secret_owner"][3]
+    assert owner_job.metadata.uid == "job-uid"
     secret_manifest = captured["secret"][1]
     assert secret_manifest["metadata"]["name"] == f"{job_run.k8s_job_name}-registry"
     docker_config_raw = base64.b64decode(
@@ -529,9 +545,18 @@ def test_create_and_run_job_raises_when_no_pod(monkeypatch, db_session, test_use
     )
 
     monkeypatch.setattr(job_service, "apply_pvc", lambda *args, **kwargs: None)
-    monkeypatch.setattr(job_service, "apply_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        job_service,
+        "apply_job",
+        lambda *args, **kwargs: SimpleNamespace(
+            metadata=SimpleNamespace(name="failed-job", uid="uid-123")
+        ),
+    )
     monkeypatch.setattr(
         job_service, "apply_registry_secret", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        job_service, "set_registry_secret_owner", lambda *args, **kwargs: None
     )
     monkeypatch.setattr(
         job_service, "wait_for_first_pod_of_job", lambda *args, **kwargs: None
