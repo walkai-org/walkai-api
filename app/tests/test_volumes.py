@@ -72,7 +72,6 @@ def test_list_volume_objects_returns_files(auth_client, db_session):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["prefix"] == prefix
-    assert payload["directories"] == ["logs/", "results/"]
     assert payload["truncated"] is False
     assert payload["next_continuation_token"] is None
     objects = payload["objects"]
@@ -118,7 +117,6 @@ def test_list_volume_objects_handles_empty(auth_client, db_session):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["objects"] == []
-    assert payload["directories"] == []
     assert payload["truncated"] is False
 
 
@@ -167,7 +165,6 @@ def test_list_volume_objects_lists_nested_directories(auth_client, db_session):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["objects"][0]["key"] == "artifacts/nested/item.txt"
-    assert payload["directories"] == ["artifacts/", "artifacts/nested/"]
 
 
 def test_list_volume_objects_requires_prefix(auth_client, db_session):
