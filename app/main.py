@@ -211,7 +211,7 @@ def get_registry_credentials(
             detail="ECR authorization token is missing",
         )
 
-    return {"token": token, "ecr_arn": settings.ecr_arn}
+    return {"token": token, "ecr_url": settings.ecr_url}
 
 
 @app.post("/invitations/verify", response_model=InvitationVerifyOut)

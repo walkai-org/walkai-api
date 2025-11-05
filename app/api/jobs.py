@@ -5,7 +5,7 @@ from kubernetes import client
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core.aws import get_s3_client, presign_put_url
+from app.core.aws import get_ecr_client, get_s3_client, presign_put_url
 from app.core.database import get_db
 from app.core.k8s import get_batch, get_core
 from app.models.jobs import Job, JobRun
@@ -22,9 +22,10 @@ def submit_job(
     db: Session = Depends(get_db),
     core: client.CoreV1Api = Depends(get_core),
     batch: client.BatchV1Api = Depends(get_batch),
+    ecr_client: BaseClient = Depends(get_ecr_client),
     user: User = Depends(get_current_user),
 ):
-    job_run = job_service.create_and_run_job(core, batch, db, payload, user)
+    job_run = job_service.create_and_run_job(core, batch, ecr_client, db, payload, user)
     return JobRunOut(job_id=job_run.job_id, pod=job_run.k8s_pod_name)
 
 

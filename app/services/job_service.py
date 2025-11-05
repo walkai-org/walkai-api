@@ -1,9 +1,11 @@
+import base64
+import json
 from collections.abc import Iterable, Sequence
 from uuid import uuid4
 
 from botocore.client import BaseClient
 from botocore.exceptions import ClientError
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from kubernetes import client, watch
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -41,6 +43,7 @@ def _render_job_manifest(
     job_id: int,
     run_token: str,
     api_base_url: str,
+    image_pull_secret: str | None = None,
 ) -> dict[str, object]:
     volume_mounts: list[dict[str, object]] = [
         {"name": "output", "mountPath": "/opt/output"}
@@ -166,15 +169,18 @@ def _render_job_manifest(
         {"name": "output", "persistentVolumeClaim": {"claimName": output_claim}}
     ]
 
-    template: dict[str, object] = {
-        "spec": {
-            "serviceAccountName": "api-client",
-            "restartPolicy": "Never",
-            "securityContext": {"fsGroup": 1000},
-            "containers": [main, uploader],
-            "volumes": volumes,
-        }
+    pod_spec: dict[str, object] = {
+        "serviceAccountName": "api-client",
+        "restartPolicy": "Never",
+        "securityContext": {"fsGroup": 1000},
+        "containers": [main, uploader],
+        "volumes": volumes,
     }
+
+    if image_pull_secret:
+        pod_spec["imagePullSecrets"] = [{"name": image_pull_secret}]
+
+    template: dict[str, object] = {"spec": pod_spec}
 
     manifest: dict[str, object] = {
         "apiVersion": "batch/v1",
@@ -202,6 +208,121 @@ def apply_pvc(core: client.CoreV1Api, manifest: dict):
         body=manifest,
         namespace=settings.namespace,
     )
+
+
+def apply_registry_secret(core: client.CoreV1Api, manifest: dict):
+    return core.create_namespaced_secret(
+        body=manifest,
+        namespace=settings.namespace,
+    )
+
+
+def _decode_registry_token(token: str) -> tuple[str, str]:
+    try:
+        decoded = base64.b64decode(token).decode("utf-8")
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR authorization token is invalid",
+        ) from exc
+
+    username, separator, password = decoded.partition(":")
+    if not separator or not username or not password:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR authorization token is malformed",
+        )
+    return username, password
+
+
+def set_registry_secret_owner(
+    core: client.CoreV1Api,
+    *,
+    secret_name: str,
+    job_manifest: dict[str, object],
+    job_resource,
+):
+    metadata = getattr(job_resource, "metadata", None)
+    job_uid = getattr(metadata, "uid", None) if metadata else None
+    job_name = getattr(metadata, "name", None) if metadata else None
+    manifest_metadata = job_manifest.get("metadata", {})
+    if not isinstance(manifest_metadata, dict):
+        manifest_metadata = {}
+    if job_name is None:
+        job_name = manifest_metadata.get("name")
+
+    if not job_uid or not job_name:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Job metadata missing for registry secret owner reference",
+        )
+
+    owner_reference = {
+        "apiVersion": job_manifest.get("apiVersion", "batch/v1"),
+        "kind": job_manifest.get("kind", "Job"),
+        "name": job_name,
+        "uid": job_uid,
+        "controller": True,
+        "blockOwnerDeletion": False,
+    }
+
+    body = {"metadata": {"ownerReferences": [owner_reference]}}
+    return core.patch_namespaced_secret(
+        name=secret_name,
+        namespace=settings.namespace,
+        body=body,
+    )
+
+
+def _render_registry_secret(
+    *, name: str, registry: str, token: str
+) -> dict[str, object]:
+    registry_host = registry.rstrip("/")
+    if not registry_host:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR registry URL is not configured",
+        )
+
+    username, password = _decode_registry_token(token)
+    docker_config = {
+        "auths": {
+            registry_host: {
+                "username": username,
+                "password": password,
+                "auth": token,
+            }
+        }
+    }
+    encoded_config = base64.b64encode(json.dumps(docker_config).encode("utf-8")).decode(
+        "utf-8"
+    )
+
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": name},
+        "type": "kubernetes.io/dockerconfigjson",
+        "data": {".dockerconfigjson": encoded_config},
+    }
+
+
+def _fetch_registry_token(ecr_client: BaseClient) -> str:
+    response = ecr_client.get_authorization_token()
+    auth_data = response.get("authorizationData", [])
+    if not auth_data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR authorization data is unavailable",
+        )
+
+    token = auth_data[0].get("authorizationToken")
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR authorization token is missing",
+        )
+    return token
 
 
 def create_volume(db: Session, storage: int, is_input: bool) -> Volume:
@@ -268,6 +389,7 @@ def wait_for_first_pod_of_job(
 def create_and_run_job(
     core: client.CoreV1Api,
     batch: client.BatchV1Api,
+    ecr_client: BaseClient,
     db: Session,
     payload: JobCreate,
     user: User,
@@ -280,6 +402,14 @@ def create_and_run_job(
     job = create_job(db, payload=payload, user_id=user.id)
     job_run = create_job_run(db, job, output_pvc)
 
+    registry_secret_name = f"{job_run.k8s_job_name}-registry"
+    authorization_token = _fetch_registry_token(ecr_client)
+    registry_secret_manifest = _render_registry_secret(
+        name=registry_secret_name,
+        registry=settings.ecr_url,
+        token=authorization_token,
+    )
+
     job_manifest = _render_job_manifest(
         image=job.image,
         gpu=job.gpu_profile,
@@ -289,9 +419,17 @@ def create_and_run_job(
         job_id=job.id,
         run_token=job_run.run_token,
         api_base_url=settings.api_base_url,
+        image_pull_secret=registry_secret_name,
     )
+    apply_registry_secret(core, registry_secret_manifest)
     apply_pvc(core, output_pvc_manifest)
-    apply_job(batch, job_manifest)
+    job_resource = apply_job(batch, job_manifest)
+    set_registry_secret_owner(
+        core,
+        secret_name=registry_secret_name,
+        job_manifest=job_manifest,
+        job_resource=job_resource,
+    )
 
     pod = wait_for_first_pod_of_job(core, job_run.k8s_job_name)
     if not pod:

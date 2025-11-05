@@ -1,3 +1,5 @@
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from types import SimpleNamespace
@@ -8,7 +10,7 @@ from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from sqlalchemy.exc import IntegrityError
 
-from app.core.aws import get_s3_client
+from app.core.aws import get_ecr_client, get_s3_client
 from app.core.k8s import get_batch, get_core
 from app.main import app
 from app.models.jobs import JobRun, RunStatus
@@ -20,14 +22,17 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
     client, user = auth_client
     fake_core = object()
     fake_batch = object()
+    fake_ecr = object()
 
     app.dependency_overrides[get_core] = lambda: fake_core
     app.dependency_overrides[get_batch] = lambda: fake_batch
+    app.dependency_overrides[get_ecr_client] = lambda: fake_ecr
     captured: dict[str, object] = {}
 
-    def fake_create(core, batch, db, payload, current_user):
+    def fake_create(core, batch, ecr_client, db, payload, current_user):
         captured["core"] = core
         captured["batch"] = batch
+        captured["ecr_client"] = ecr_client
         captured["db"] = db
         captured["payload"] = payload
         captured["user"] = current_user
@@ -47,11 +52,13 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
     finally:
         app.dependency_overrides.pop(get_core, None)
         app.dependency_overrides.pop(get_batch, None)
+        app.dependency_overrides.pop(get_ecr_client, None)
 
     assert response.status_code == 200
     assert response.json() == {"job_id": 42, "pod": "pod-123"}
     assert captured["core"] is fake_core
     assert captured["batch"] is fake_batch
+    assert captured["ecr_client"] is fake_ecr
     assert captured["db"] is db_session
     assert isinstance(captured["payload"], JobCreate)
     assert captured["payload"].image == "repo/image:tag"
@@ -339,6 +346,28 @@ def test_render_job_manifest_skips_gpu_limits_when_empty():
     assert "resources" not in container
 
 
+def test_render_registry_secret_encodes_docker_config():
+    token = base64.b64encode(b"AWS:test-password").decode("utf-8")
+
+    manifest = job_service._render_registry_secret(
+        name="test-secret",
+        registry="https://registry.example.com/",
+        token=token,
+    )
+
+    assert manifest["metadata"]["name"] == "test-secret"
+    assert manifest["type"] == "kubernetes.io/dockerconfigjson"
+    docker_config_raw = base64.b64decode(manifest["data"][".dockerconfigjson"]).decode(
+        "utf-8"
+    )
+    docker_config = json.loads(docker_config_raw)
+    assert "https://registry.example.com" in docker_config["auths"]
+    entry = docker_config["auths"]["https://registry.example.com"]
+    assert entry["username"] == "AWS"
+    assert entry["password"] == "test-password"
+    assert entry["auth"] == token
+
+
 def test_create_volume_persists_volume(db_session):
     volume = job_service.create_volume(db_session, storage=8, is_input=True)
 
@@ -425,6 +454,14 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
     payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g4_40, storage=5)
     fake_core = object()
     fake_batch = object()
+    raw_credentials = "AWS:super-secret-token"
+    encoded_token = base64.b64encode(raw_credentials.encode("utf-8")).decode("utf-8")
+
+    fake_ecr = SimpleNamespace(
+        get_authorization_token=lambda: {
+            "authorizationData": [{"authorizationToken": encoded_token}]
+        }
+    )
 
     captured: dict[str, tuple[object, dict]] = {}
 
@@ -433,15 +470,31 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
 
     def fake_apply_job(batch, manifest):
         captured["job"] = (batch, manifest)
+        return SimpleNamespace(
+            metadata=SimpleNamespace(name=manifest["metadata"]["name"], uid="job-uid")
+        )
+
+    def fake_apply_secret(core, manifest):
+        captured["secret"] = (core, manifest)
+
+    def fake_set_secret_owner(core, *, secret_name, job_manifest, job_resource):
+        captured["secret_owner"] = (
+            core,
+            secret_name,
+            job_manifest,
+            job_resource,
+        )
 
     pod = SimpleNamespace(metadata=SimpleNamespace(name="pod-xyz"))
 
     monkeypatch.setattr(job_service, "apply_pvc", fake_apply_pvc)
     monkeypatch.setattr(job_service, "apply_job", fake_apply_job)
+    monkeypatch.setattr(job_service, "apply_registry_secret", fake_apply_secret)
+    monkeypatch.setattr(job_service, "set_registry_secret_owner", fake_set_secret_owner)
     monkeypatch.setattr(job_service, "wait_for_first_pod_of_job", lambda *a, **k: pod)
 
     job_run = job_service.create_and_run_job(
-        fake_core, fake_batch, db_session, payload, test_user
+        fake_core, fake_batch, fake_ecr, db_session, payload, test_user
     )
 
     assert job_run.status == RunStatus.pending
@@ -449,8 +502,29 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
     assert job_run.k8s_job_name
     assert captured["pvc"][0] is fake_core
     assert captured["job"][0] is fake_batch
+    assert captured["secret"][0] is fake_core
     assert captured["pvc"][1]["metadata"]["name"] == job_run.output_volume.pvc_name
     assert captured["job"][1]["metadata"]["name"] == job_run.k8s_job_name
+    assert captured["secret_owner"][0] is fake_core
+    assert captured["secret_owner"][1] == f"{job_run.k8s_job_name}-registry"
+    owner_job = captured["secret_owner"][3]
+    assert owner_job.metadata.uid == "job-uid"
+    secret_manifest = captured["secret"][1]
+    assert secret_manifest["metadata"]["name"] == f"{job_run.k8s_job_name}-registry"
+    docker_config_raw = base64.b64decode(
+        secret_manifest["data"][".dockerconfigjson"]
+    ).decode("utf-8")
+    docker_config = json.loads(docker_config_raw)
+    registry_key = job_service.settings.ecr_url.rstrip("/")
+    assert registry_key in docker_config["auths"]
+    registry_entry = docker_config["auths"][registry_key]
+    assert registry_entry["auth"] == encoded_token
+    assert registry_entry["username"] == "AWS"
+    assert registry_entry["password"] == "super-secret-token"
+    pod_spec = captured["job"][1]["spec"]["template"]["spec"]
+    assert pod_spec["imagePullSecrets"] == [
+        {"name": f"{job_run.k8s_job_name}-registry"}
+    ]
 
     db_session.expire_all()
     stored_run = db_session.get(JobRun, job_run.id)
@@ -463,16 +537,34 @@ def test_create_and_run_job_raises_when_no_pod(monkeypatch, db_session, test_use
     payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g7_79, storage=3)
     fake_core = object()
     fake_batch = object()
+    encoded_token = base64.b64encode(b"AWS:noop-token").decode("utf-8")
+    fake_ecr = SimpleNamespace(
+        get_authorization_token=lambda: {
+            "authorizationData": [{"authorizationToken": encoded_token}]
+        }
+    )
 
     monkeypatch.setattr(job_service, "apply_pvc", lambda *args, **kwargs: None)
-    monkeypatch.setattr(job_service, "apply_job", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        job_service,
+        "apply_job",
+        lambda *args, **kwargs: SimpleNamespace(
+            metadata=SimpleNamespace(name="failed-job", uid="uid-123")
+        ),
+    )
+    monkeypatch.setattr(
+        job_service, "apply_registry_secret", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        job_service, "set_registry_secret_owner", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         job_service, "wait_for_first_pod_of_job", lambda *args, **kwargs: None
     )
 
     with pytest.raises(job_service.HTTPException) as exc_info:
         job_service.create_and_run_job(
-            fake_core, fake_batch, db_session, payload, test_user
+            fake_core, fake_batch, fake_ecr, db_session, payload, test_user
         )
 
     assert exc_info.value.status_code == 400
