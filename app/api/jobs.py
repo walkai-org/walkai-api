@@ -10,7 +10,14 @@ from app.core.database import get_db
 from app.core.k8s import get_batch, get_core
 from app.models.jobs import Job, JobRun
 from app.models.users import User
-from app.schemas.jobs import JobCreate, JobDetailOut, JobOut, JobRunDetail, JobRunOut
+from app.schemas.jobs import (
+    JobCreate,
+    JobDetailOut,
+    JobImage,
+    JobOut,
+    JobRunDetail,
+    JobRunOut,
+)
 from app.services import job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -35,6 +42,14 @@ def list_jobs(
     _: User = Depends(get_current_user),
 ):
     return job_service.list_jobs(db)
+
+
+@router.get("/images", response_model=list[JobImage])
+def list_job_images(
+    ecr_client: BaseClient = Depends(get_ecr_client),
+    _: User = Depends(get_current_user),
+):
+    return job_service.list_available_images(ecr_client)
 
 
 @router.get("/{job_id}", response_model=JobDetailOut)

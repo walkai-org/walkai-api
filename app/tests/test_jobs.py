@@ -100,6 +100,54 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
     }
 
 
+def test_list_job_images_returns_available_registry_images(auth_client, monkeypatch):
+    client, _ = auth_client
+    monkeypatch.setattr(
+        job_service.settings,
+        "ecr_url",
+        "https://registry.local/jobs",
+        raising=False,
+    )
+
+    class FakePaginator:
+        def paginate(self, **kwargs):
+            return iter(
+                [
+                    {
+                        "imageDetails": [
+                            {
+                                "imageTags": ["latest"],
+                                "imageDigest": "sha256:aaa",
+                                "imagePushedAt": datetime(2024, 1, 1, tzinfo=UTC),
+                            }
+                        ]
+                    }
+                ]
+            )
+
+    class FakeECR:
+        def get_paginator(self, name):
+            assert name == "describe_images"
+            return FakePaginator()
+
+    app.dependency_overrides[get_ecr_client] = lambda: FakeECR()
+    try:
+        response = client.get("/jobs/images")
+    finally:
+        app.dependency_overrides.pop(get_ecr_client, None)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data == [
+        {
+            "image": "https://registry.local/jobs:latest",
+            "tag": "latest",
+            "digest": "sha256:aaa",
+            "pushed_at": "2024-01-01T00:00:00Z",
+        }
+    ]
+
+
 def test_list_jobs_picks_run_with_latest_started_time(auth_client, db_session):
     client, user = auth_client
     payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g3_40, storage=6)
@@ -366,6 +414,55 @@ def test_render_registry_secret_encodes_docker_config():
     assert entry["username"] == "AWS"
     assert entry["password"] == "test-password"
     assert entry["auth"] == token
+
+
+def test_list_available_images_returns_sorted_entries(monkeypatch):
+    monkeypatch.setattr(
+        job_service.settings,
+        "ecr_url",
+        "https://registry.local/jobs",
+        raising=False,
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakePaginator:
+        def paginate(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return iter(
+                [
+                    {
+                        "imageDetails": [
+                            {
+                                "imageTags": ["latest", "v1"],
+                                "imageDigest": "sha256:abc",
+                                "imagePushedAt": datetime(2024, 1, 2, tzinfo=UTC),
+                            },
+                            {
+                                "imageTags": ["v0"],
+                                "imageDigest": "sha256:def",
+                                "imagePushedAt": datetime(2023, 12, 30, tzinfo=UTC),
+                            },
+                        ]
+                    }
+                ]
+            )
+
+    class FakeECR:
+        def __init__(self):
+            self._paginator = FakePaginator()
+
+        def get_paginator(self, name):
+            assert name == "describe_images"
+            return self._paginator
+
+    images = job_service.list_available_images(FakeECR())
+
+    assert captured["kwargs"]["repositoryName"] == "jobs"
+    assert captured["kwargs"]["filter"] == {"tagStatus": "TAGGED"}
+    assert [img.tag for img in images] == ["v1", "latest", "v0"]
+    assert images[0].image == "https://registry.local/jobs:v1"
+    assert images[0].digest == "sha256:abc"
 
 
 def test_create_volume_persists_volume(db_session):

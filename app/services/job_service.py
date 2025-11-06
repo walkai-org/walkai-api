@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from botocore.client import BaseClient
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import get_settings
 from app.models.jobs import Job, JobRun, RunStatus, Volume
 from app.models.users import User
-from app.schemas.jobs import JobCreate
+from app.schemas.jobs import JobCreate, JobImage
 
 settings = get_settings()
 
@@ -324,6 +325,86 @@ def _fetch_registry_token(ecr_client: BaseClient) -> str:
             detail="ECR authorization token is missing",
         )
     return token
+
+
+def _extract_repository_name(registry_url: str) -> str:
+    trimmed = registry_url.strip().rstrip("/")
+    if not trimmed:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR registry URL is not configured",
+        )
+
+    normalized = trimmed.split("://", 1)[-1]
+    if "/" not in normalized:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR repository name is missing in registry URL",
+        )
+
+    repository = normalized.split("/", 1)[1].strip("/")
+    if not repository:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ECR repository name is missing in registry URL",
+        )
+    return repository
+
+
+def _pushed_at_sort_value(value: datetime | None) -> float:
+    if value is None:
+        return 0.0
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=UTC).timestamp()
+    return value.timestamp()
+
+
+def list_available_images(ecr_client: BaseClient) -> list[JobImage]:
+    repository = _extract_repository_name(settings.ecr_url)
+    registry = settings.ecr_url.rstrip("/")
+    try:
+        paginator = ecr_client.get_paginator("describe_images")
+        pages = paginator.paginate(
+            repositoryName=repository,
+            filter={"tagStatus": "TAGGED"},
+        )
+    except ClientError as exc:
+        print(exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to list images from ECR",
+        ) from exc
+
+    images: list[JobImage] = []
+    try:
+        for page in pages:
+            for detail in page.get("imageDetails", []):
+                tags = detail.get("imageTags") or []
+                if not tags:
+                    continue
+                digest = detail.get("imageDigest")
+                pushed_at = detail.get("imagePushedAt")
+                for tag in tags:
+                    images.append(
+                        JobImage(
+                            image=f"{registry}:{tag}",
+                            tag=tag,
+                            digest=digest,
+                            pushed_at=pushed_at,
+                        )
+                    )
+    except ClientError as exc:
+        print(exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to list images from ECR",
+        ) from exc
+
+    images.sort(
+        key=lambda item: (_pushed_at_sort_value(item.pushed_at), item.tag),
+        reverse=True,
+    )
+    return images
 
 
 def create_volume(db: Session, storage: int, is_input: bool) -> Volume:

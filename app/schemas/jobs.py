@@ -32,6 +32,13 @@ class JobRunOut(BaseModel):
     pod: str
 
 
+class JobImage(BaseModel):
+    image: str
+    tag: str
+    digest: str | None = None
+    pushed_at: datetime | None = None
+
+
 class JobRunBase(BaseModel):
     id: int
     status: RunStatus
