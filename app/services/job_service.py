@@ -52,6 +52,7 @@ def _render_job_manifest(
     main: dict[str, object] = {
         "name": job_name,
         "image": image,
+        "imagePullPolicy": "Always",
         "volumeMounts": volume_mounts,
     }
 
