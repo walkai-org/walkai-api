@@ -45,6 +45,7 @@ def _render_job_manifest(
     run_token: str,
     api_base_url: str,
     image_pull_secret: str | None = None,
+    secret_names: Sequence[str] | None = None,
 ) -> dict[str, object]:
     volume_mounts: list[dict[str, object]] = [
         {"name": "output", "mountPath": "/opt/output"}
@@ -56,6 +57,9 @@ def _render_job_manifest(
         "imagePullPolicy": "Always",
         "volumeMounts": volume_mounts,
     }
+
+    if secret_names:
+        main["envFrom"] = [{"secretRef": {"name": name}} for name in secret_names]
 
     if gpu:
         resource_key = f"nvidia.com/mig-{gpu}"
@@ -502,6 +506,7 @@ def create_and_run_job(
         run_token=job_run.run_token,
         api_base_url=settings.api_base_url,
         image_pull_secret=registry_secret_name,
+        secret_names=payload.secret_names,
     )
     apply_registry_secret(core, registry_secret_manifest)
     apply_pvc(core, output_pvc_manifest)

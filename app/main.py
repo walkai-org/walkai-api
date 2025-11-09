@@ -1,5 +1,5 @@
 import logging
-import secrets
+import secrets as secrets_module
 import sys
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api import cluster, jobs, tokens, volumes
+from app.api import secrets as secrets_api
 from app.api.deps import get_current_user, require_admin
 from app.core.aws import get_ddb_oauth_table, get_ecr_client
 from app.core.config import get_settings, lifespan
@@ -85,6 +86,7 @@ app.include_router(cluster.router)
 app.include_router(jobs.router)
 app.include_router(volumes.router)
 app.include_router(tokens.router)
+app.include_router(secrets_api.router)
 
 
 def _require_base_url() -> str:
@@ -260,7 +262,7 @@ def github_start(
         )
 
     code_verifier, code_challenge = gen_pkce()
-    state = secrets.token_urlsafe(16)
+    state = secrets_module.token_urlsafe(16)
 
     data = {"code_verifier": code_verifier, "flow": flow}
     if invitation_token:
