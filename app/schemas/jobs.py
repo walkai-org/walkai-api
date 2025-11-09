@@ -1,7 +1,9 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.secrets import normalize_secret_name
 
 
 class GPUProfile(StrEnum):
@@ -25,6 +27,25 @@ class JobCreate(BaseModel):
     image: str
     gpu: GPUProfile
     storage: int = 2
+    secret_names: list[str] = Field(
+        default_factory=list,
+        description="Existing Kubernetes secrets to mount via envFrom",
+    )
+
+    @field_validator("secret_names")
+    @classmethod
+    def validate_secret_names(cls, values: list[str] | None) -> list[str]:
+        if not values:
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized_value = normalize_secret_name(value)
+            if normalized_value in seen:
+                raise ValueError("Secret names must be unique")
+            seen.add(normalized_value)
+            normalized.append(normalized_value)
+        return normalized
 
 
 class JobRunOut(BaseModel):

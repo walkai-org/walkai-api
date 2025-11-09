@@ -6,6 +6,16 @@ _NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _DATA_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
+def normalize_secret_name(value: str) -> str:
+    candidate = value.strip()
+    if not _NAME_PATTERN.fullmatch(candidate):
+        raise ValueError(
+            "Secret name must start/end with an alphanumeric character and "
+            "contain only lowercase letters, numbers, and dashes"
+        )
+    return candidate
+
+
 class SecretCreate(BaseModel):
     name: str = Field(
         ...,
@@ -22,13 +32,7 @@ class SecretCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        candidate = value.strip()
-        if not _NAME_PATTERN.fullmatch(candidate):
-            raise ValueError(
-                "Secret name must start/end with an alphanumeric character and "
-                "contain only lowercase letters, numbers, and dashes"
-            )
-        return candidate
+        return normalize_secret_name(value)
 
     @field_validator("data")
     @classmethod

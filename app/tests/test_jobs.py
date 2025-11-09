@@ -8,6 +8,7 @@ import boto3
 import pytest
 from botocore.response import StreamingBody
 from botocore.stub import Stubber
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app.core.aws import get_ecr_client, get_s3_client
@@ -47,6 +48,7 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
                 "image": "repo/image:tag",
                 "gpu": GPUProfile.g1_10.value,
                 "storage": 4,
+                "secret_names": ["api-token", "db-secret"],
             },
         )
     finally:
@@ -64,6 +66,7 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
     assert captured["payload"].image == "repo/image:tag"
     assert captured["payload"].gpu == GPUProfile.g1_10
     assert captured["payload"].storage == 4
+    assert captured["payload"].secret_names == ["api-token", "db-secret"]
     assert captured["user"].id == user.id
 
 
@@ -408,6 +411,26 @@ def test_render_job_manifest_populates_gpu_limits():
     )
 
 
+def test_render_job_manifest_includes_secret_env_from():
+    manifest = job_service._render_job_manifest(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        job_name="job-123",
+        output_claim="claim-1",
+        run_id=1,
+        job_id=2,
+        run_token="run-token-abc",
+        api_base_url="https://api.example.com",
+        secret_names=["api-token", "db-secret"],
+    )
+
+    container = manifest["spec"]["template"]["spec"]["containers"][0]
+    assert container["envFrom"] == [
+        {"secretRef": {"name": "api-token"}},
+        {"secretRef": {"name": "db-secret"}},
+    ]
+
+
 def test_render_job_manifest_skips_gpu_limits_when_empty():
     manifest = job_service._render_job_manifest(
         image="repo/image:tag",
@@ -575,6 +598,25 @@ def test_create_job_run_links_job_and_volume(db_session, test_user):
     assert run.output_volume_id == volume.id
     assert run.k8s_pod_name is None
     assert run.status == RunStatus.pending
+
+
+def test_job_create_normalizes_secret_names():
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        secret_names=["  api-secret  "],
+    )
+
+    assert payload.secret_names == ["api-secret"]
+
+
+def test_job_create_rejects_duplicate_secret_names():
+    with pytest.raises(ValidationError):
+        JobCreate(
+            image="repo/image:tag",
+            gpu=GPUProfile.g1_10,
+            secret_names=["dup-secret", "dup-secret"],
+        )
 
 
 def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
