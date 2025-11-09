@@ -161,3 +161,80 @@ def test_get_secret_detail_returns_404_for_unmanaged(auth_client):
 
     assert response.status_code == 404
     assert "not managed" in response.json()["detail"]
+
+
+def test_delete_secret_removes_secret(auth_client):
+    client, _ = auth_client
+    settings = get_settings()
+    captured: dict[str, object] = {}
+
+    secret = SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="managed-secret",
+            labels={
+                secret_service.MANAGED_SECRET_LABEL_KEY: secret_service.MANAGED_SECRET_LABEL_VALUE
+            },
+        ),
+        data={},
+    )
+
+    class FakeCore:
+        def read_namespaced_secret(self, name, namespace):
+            assert name == "managed-secret"
+            assert namespace == settings.namespace
+            return secret
+
+        def delete_namespaced_secret(self, name, namespace):
+            captured["delete"] = (name, namespace)
+
+    _override_core(FakeCore())
+    try:
+        response = client.delete("/secrets/managed-secret")
+    finally:
+        _clear_core_override()
+
+    assert response.status_code == 204
+    assert captured["delete"] == ("managed-secret", settings.namespace)
+
+
+def test_delete_secret_returns_404_when_missing(auth_client):
+    client, _ = auth_client
+    settings = get_settings()
+
+    class FakeCore:
+        def read_namespaced_secret(self, name, namespace):
+            assert namespace == settings.namespace
+            raise ApiException(status=404, reason="Not Found")
+
+    _override_core(FakeCore())
+    try:
+        response = client.delete("/secrets/missing")
+    finally:
+        _clear_core_override()
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Secret missing not found"
+
+
+def test_delete_secret_returns_404_for_unmanaged(auth_client):
+    client, _ = auth_client
+    settings = get_settings()
+
+    secret = SimpleNamespace(
+        metadata=SimpleNamespace(name="kube-root-ca.crt", labels={}),
+        data=None,
+    )
+
+    class FakeCore:
+        def read_namespaced_secret(self, name, namespace):
+            assert namespace == settings.namespace
+            return secret
+
+    _override_core(FakeCore())
+    try:
+        response = client.delete("/secrets/kube-root-ca.crt")
+    finally:
+        _clear_core_override()
+
+    assert response.status_code == 404
+    assert "not managed" in response.json()["detail"]

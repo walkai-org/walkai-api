@@ -2,7 +2,7 @@ import re
 
 from pydantic import BaseModel, Field, field_validator
 
-_NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+_NAME_PATTERN = re.compile(r"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$")
 _DATA_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -11,7 +11,7 @@ def normalize_secret_name(value: str) -> str:
     if not _NAME_PATTERN.fullmatch(candidate):
         raise ValueError(
             "Secret name must start/end with an alphanumeric character and "
-            "contain only lowercase letters, numbers, and dashes"
+            "contain only lowercase letters, numbers, dashes, or dots"
         )
     return candidate
 

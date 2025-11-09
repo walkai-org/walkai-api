@@ -33,3 +33,12 @@ def get_secret_detail(
     _: object = Depends(get_current_user),
 ) -> SecretDetail:
     return secret_service.get_secret_detail(core, secret_name)
+
+
+@router.delete("/{secret_name}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_secret(
+    secret_name: str,
+    core: client.CoreV1Api = Depends(get_core),
+    _: object = Depends(get_current_user),
+) -> None:
+    secret_service.delete_secret(core, secret_name)
