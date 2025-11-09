@@ -638,6 +638,22 @@ def get_job_run(db: Session, job_id: int, run_id: int) -> JobRun:
     return result
 
 
+def get_job_run_by_pod_name(db: Session, pod_name: str) -> JobRun:
+    stmt = (
+        select(JobRun)
+        .options(
+            selectinload(JobRun.job),
+            selectinload(JobRun.output_volume),
+            selectinload(JobRun.input_volume),
+        )
+        .where(JobRun.k8s_pod_name == pod_name)
+    )
+    result = db.execute(stmt).scalar_one_or_none()
+    if result is None:
+        raise HTTPException(status_code=404, detail="Job run not found")
+    return result
+
+
 def get_volume(db: Session, volume_id: int) -> Volume:
     volume = db.get(Volume, volume_id)
     if volume is None:

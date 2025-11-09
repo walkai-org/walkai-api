@@ -257,6 +257,36 @@ def test_get_job_run_detail_includes_volume_information(auth_client, db_session)
     }
 
 
+def test_get_job_run_by_pod_returns_job_and_run(auth_client, db_session):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g4_40, storage=4)
+    job = job_service.create_job(db_session, payload, user.id)
+    output_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, output_volume)
+    run.k8s_pod_name = "pod-query"
+    db_session.commit()
+
+    response = client.get(f"/jobs/runs/by-pod/{run.k8s_pod_name}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == job.id
+    assert data["id"] == run.id
+    assert data["status"] == run.status.value
+    assert data["output_volume"]["id"] == output_volume.id
+
+
+def test_get_job_run_by_pod_returns_404_when_missing(auth_client):
+    client, _ = auth_client
+
+    response = client.get("/jobs/runs/by-pod/non-existent-pod")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Job run not found"
+
+
 def test_get_job_run_logs_streams_from_s3(auth_client, db_session):
     client, user = auth_client
 

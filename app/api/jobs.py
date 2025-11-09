@@ -15,6 +15,7 @@ from app.schemas.jobs import (
     JobDetailOut,
     JobImage,
     JobOut,
+    JobRunByPodOut,
     JobRunDetail,
     JobRunOut,
 )
@@ -50,6 +51,15 @@ def list_job_images(
     _: User = Depends(get_current_user),
 ):
     return job_service.list_available_images(ecr_client)
+
+
+@router.get("/runs/by-pod/{pod_name}", response_model=JobRunByPodOut)
+def get_job_run_by_pod_name(
+    pod_name: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return job_service.get_job_run_by_pod_name(db, pod_name)
 
 
 @router.get("/{job_id}", response_model=JobDetailOut)
