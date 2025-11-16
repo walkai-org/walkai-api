@@ -666,6 +666,15 @@ def list_jobs(db: Session) -> Sequence[Job]:
     return result.scalars().unique().all()
 
 
+def list_volumes(db: Session, *, is_input: bool | None = None) -> Sequence[Volume]:
+    stmt = select(Volume)
+    if is_input is not None:
+        stmt = stmt.where(Volume.is_input.is_(is_input))
+    stmt = stmt.order_by(Volume.id)
+    result = db.execute(stmt)
+    return result.scalars().all()
+
+
 def get_job(db: Session, job_id: int) -> Job:
     stmt = (
         select(Job)
