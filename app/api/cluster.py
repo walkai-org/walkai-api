@@ -1,3 +1,5 @@
+from logging import getLogger
+
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from kubernetes import client
@@ -15,10 +17,18 @@ from app.services import cluster_service
 router = APIRouter(prefix="/cluster", tags=["cluster"])
 settings = get_settings()
 
+logger = getLogger(__name__)
+
+# async def dump_body(request: Request):
+#     body = await request.body()
+#     logger.error(f"err {body}")
+#     return body
+
 
 @router.post("/insights", status_code=status.HTTP_204_NO_CONTENT)
 def submit_insights(
     payload: ClusterInsightsIn,
+    #    _raw=Depends(dump_body),
     ddb_table=Depends(get_ddb_cluster_cache_table),
     db: Session = Depends(get_db),
     _=Depends(require_admin),
