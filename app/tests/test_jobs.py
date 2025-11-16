@@ -11,6 +11,7 @@ from botocore.stub import Stubber
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+import app.api.jobs as jobs_api
 from app.core.aws import get_ecr_client, get_s3_client
 from app.core.k8s import get_batch, get_core
 from app.main import app
@@ -376,6 +377,150 @@ def test_get_job_run_logs_returns_404_when_missing(auth_client, db_session):
     assert response.json()["detail"] == "Log file not found"
 
 
+def test_presign_object_sets_output_prefix(auth_client, db_session, monkeypatch):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, user.id)
+    out_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    run = job_service.create_job_run(db_session, job, out_volume)
+    db_session.commit()
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_presign(s3_client, key, method="PUT"):
+        calls.append({"key": key, "method": method})
+        return f"https://example.com/{key}"
+
+    monkeypatch.setattr(jobs_api, "presign_url", _fake_presign)
+
+    class _StubS3:
+        pass
+
+    app.dependency_overrides[get_s3_client] = lambda: _StubS3()
+    try:
+        response = client.get(
+            f"/jobs/{job.id}/runs/{run.id}/presign",
+            params={"path": "results/file.txt"},
+            headers={"X-Run-Token": run.run_token},
+        )
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+
+    assert response.status_code == 200
+    db_session.refresh(run.output_volume)
+    expected_prefix = f"users/{user.id}/jobs/{job.id}/{run.id}/outputs"
+    assert run.output_volume.key_prefix == expected_prefix
+    assert calls == [{"key": f"{expected_prefix}/results/file.txt", "method": "PUT"}]
+    assert response.json()["url"].endswith("results/file.txt")
+
+
+def test_presign_object_for_input_enforces_get(auth_client, db_session, monkeypatch):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, user.id)
+    output_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
+    input_volume.key_prefix = f"users/{user.id}/inputs/input-vol"
+    run = job_service.create_job_run(
+        db_session, job, output_volume, input_pvc=input_volume
+    )
+    db_session.commit()
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_presign(s3_client, key, method="PUT"):
+        calls.append({"key": key, "method": method})
+        return f"https://example.com/{key}"
+
+    monkeypatch.setattr(jobs_api, "presign_url", _fake_presign)
+
+    class _StubS3:
+        pass
+
+    app.dependency_overrides[get_s3_client] = lambda: _StubS3()
+    try:
+        bad_resp = client.get(
+            f"/jobs/{job.id}/runs/{run.id}/presign",
+            params={
+                "path": "data/input.txt",
+                "direction": "input",
+                "method": "PUT",
+            },
+            headers={"X-Run-Token": run.run_token},
+        )
+        good_resp = client.get(
+            f"/jobs/{job.id}/runs/{run.id}/presign",
+            params={
+                "path": "data/input.txt",
+                "direction": "input",
+                "method": "GET",
+            },
+            headers={"X-Run-Token": run.run_token},
+        )
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+
+    assert bad_resp.status_code == 400
+    assert bad_resp.json()["detail"] == "Inputs only support method=GET for presign"
+
+    assert good_resp.status_code == 200
+    assert calls == [
+        {
+            "key": f"{input_volume.key_prefix}/data/input.txt",
+            "method": "GET",
+        }
+    ]
+    assert good_resp.json()["url"].endswith("data/input.txt")
+
+
+def test_list_input_objects_returns_relative_paths(
+    auth_client, db_session, monkeypatch
+):
+    client, user = auth_client
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, user.id)
+    output_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
+    input_volume.key_prefix = f"users/{user.id}/inputs/input-items"
+    run = job_service.create_job_run(
+        db_session, job, output_volume, input_pvc=input_volume
+    )
+    db_session.commit()
+
+    captured: dict[str, str] = {}
+
+    def _fake_list(s3_client, prefix: str):
+        captured["prefix"] = prefix
+        return [
+            f"{prefix}file-1.txt",
+            f"{prefix}nested/file-2.bin",
+        ]
+
+    monkeypatch.setattr(jobs_api, "list_s3_objects_with_prefix", _fake_list)
+
+    class _StubS3:
+        pass
+
+    app.dependency_overrides[get_s3_client] = lambda: _StubS3()
+    try:
+        response = client.get(
+            f"/jobs/{job.id}/runs/{run.id}/inputs",
+            headers={"X-Run-Token": run.run_token},
+        )
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+
+    assert response.status_code == 200
+    assert captured["prefix"] == f"{input_volume.key_prefix}/"
+    assert response.json() == {"files": ["file-1.txt", "nested/file-2.bin"]}
+
+
 def test_render_pvc_manifest_shapes_storage():
     manifest = job_service._render_persistent_volume_claim(
         name="vol-123",
@@ -449,6 +594,39 @@ def test_render_job_manifest_skips_gpu_limits_when_empty():
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
     assert "resources" not in container
+
+
+def test_render_job_manifest_mounts_input_volume(db_session):
+    input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
+
+    manifest = job_service._render_job_manifest(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        job_name="job-with-input",
+        output_claim="claim-out",
+        input_volume=input_volume,
+        run_id=99,
+        job_id=100,
+        run_token="run-token",
+        api_base_url="https://api.example.com",
+    )
+
+    pod_spec = manifest["spec"]["template"]["spec"]
+    main = pod_spec["containers"][0]
+    input_claim = {
+        "name": "input",
+        "persistentVolumeClaim": {"claimName": input_volume.pvc_name},
+    }
+
+    assert {"name": "input", "mountPath": "/opt/input"} in main["volumeMounts"]
+    assert input_claim in pod_spec["volumes"]  # type: ignore[index]
+
+    init_containers = pod_spec.get("initContainers")
+    assert init_containers
+    downloader = init_containers[0]
+    assert {"name": "input", "mountPath": "/opt/input"} in downloader["volumeMounts"]
+    env_names = {env["name"] for env in downloader["env"]}
+    assert {"RUN_TOKEN", "INPUT_LIST_ENDPOINT", "PRESIGN_ENDPOINT"} <= env_names
 
 
 def test_render_registry_secret_encodes_docker_config():
@@ -704,6 +882,63 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
     assert stored_run is not None
     assert stored_run.job_id == job_run.job_id
     assert stored_run.output_volume_id == job_run.output_volume_id
+
+
+def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_user):
+    input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g2_20,
+        storage=4,
+        input_id=input_volume.id,
+    )
+    fake_core = object()
+    fake_batch = object()
+    encoded_token = base64.b64encode(b"AWS:token").decode("utf-8")
+    fake_ecr = SimpleNamespace(
+        get_authorization_token=lambda: {
+            "authorizationData": [{"authorizationToken": encoded_token}]
+        }
+    )
+
+    captured_pvcs: list[tuple[object, dict]] = []
+    captured_job: dict[str, object] = {}
+
+    def fake_apply_pvc(core, manifest):
+        captured_pvcs.append((core, manifest))
+
+    def fake_apply_job(batch, manifest):
+        captured_job["value"] = (batch, manifest)
+        return SimpleNamespace(
+            metadata=SimpleNamespace(name=manifest["metadata"]["name"], uid="job-uid")
+        )
+
+    pod = SimpleNamespace(metadata=SimpleNamespace(name="pod-with-input"))
+
+    monkeypatch.setattr(job_service, "apply_pvc", fake_apply_pvc)
+    monkeypatch.setattr(job_service, "apply_job", fake_apply_job)
+    monkeypatch.setattr(job_service, "apply_registry_secret", lambda *a, **k: None)
+    monkeypatch.setattr(job_service, "set_registry_secret_owner", lambda *a, **k: None)
+    monkeypatch.setattr(job_service, "wait_for_first_pod_of_job", lambda *a, **k: pod)
+
+    job_run = job_service.create_and_run_job(
+        fake_core, fake_batch, fake_ecr, db_session, payload, test_user
+    )
+
+    assert job_run.input_volume_id == input_volume.id
+    pvc_names = {manifest["metadata"]["name"] for _, manifest in captured_pvcs}
+    assert job_run.output_volume.pvc_name in pvc_names
+    assert input_volume.pvc_name in pvc_names
+
+    batch_obj, job_manifest = captured_job["value"]
+    assert batch_obj is fake_batch
+    pod_spec = job_manifest["spec"]["template"]["spec"]
+    input_claim = {
+        "name": "input",
+        "persistentVolumeClaim": {"claimName": input_volume.pvc_name},
+    }
+    assert input_claim in pod_spec["volumes"]  # type: ignore[index]
+    assert pod_spec["initContainers"]
 
 
 def test_create_and_run_job_raises_when_no_pod(monkeypatch, db_session, test_user):

@@ -35,7 +35,7 @@ class InputVolumeCreate(BaseModel):
 
 class InputVolumeFileUpload(BaseModel):
     volume_id: int
-    number_of_files: int
+    file_names: list[str]
 
 
 class InputVolumeFileUploadOut(BaseModel):

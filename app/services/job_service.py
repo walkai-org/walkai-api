@@ -606,8 +606,8 @@ def create_and_run_job(
 
     input_vol = None
     input_pvc_manifest = None
-    if payload.volume_id:
-        input_vol = get_volume(db, payload.volume_id)
+    if payload.input_id:
+        input_vol = get_volume(db, payload.input_id)
         input_pvc_manifest = _render_persistent_volume_claim(
             name=input_vol.pvc_name, storage=input_vol.size
         )

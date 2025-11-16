@@ -29,15 +29,16 @@ def create_input_volume(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    return job_service.create_input_volume_with_upload(
+    volume = job_service.create_input_volume_with_upload(
         db,
         user=user,
         storage=payload.storage,
     )
+    return {"volume": volume}
 
 
 @router.post(
-    "/inputs/file",
+    "/inputs/presigneds",
     status_code=status.HTTP_201_CREATED,
     response_model=InputVolumeFileUploadOut,
 )
@@ -51,10 +52,14 @@ def upload_file(
         raise HTTPException(status_code=400, detail="Volume must be input vol")
 
     presigneds = []
-    for _ in range(payload.number_of_files):
-        presigneds.append(presign_url(s3_client, key=vol.key_prefix))  # type: ignore
+    for name in payload.file_names:
+        if not vol.key_prefix:
+            raise HTTPException(
+                status_code=500, detail="Input volume missing key prefix"
+            )
+        presigneds.append(presign_url(s3_client, key=f"{vol.key_prefix}/{name}"))
 
-    return presigneds
+    return {"presigneds": presigneds}
 
 
 @router.get("/{volume_id}/objects", response_model=VolumeListingOut)
