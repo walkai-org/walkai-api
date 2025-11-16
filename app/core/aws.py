@@ -1,3 +1,5 @@
+from typing import Literal
+
 import boto3
 from boto3.session import Session
 from botocore.client import BaseClient
@@ -41,13 +43,48 @@ def get_ecr_client(request: Request) -> BaseClient:
     return ecr_client
 
 
-def presign_put_url(s3_client: BaseClient, key: str, expires: int = 3600) -> str:
+def presign_url(
+    s3_client: BaseClient,
+    key: str,
+    method: Literal["GET", "PUT"] = "PUT",
+    expires: int = 3600,
+) -> str:
+    if method == "PUT":
+        client_method = "put_object"
+    elif method == "GET":
+        client_method = "get_object"
+    else:
+        raise ValueError(f"Unsupported method for presign: {method}")
+
     return s3_client.generate_presigned_url(
-        ClientMethod="put_object",
+        ClientMethod=client_method,
         Params={"Bucket": settings.aws_s3_bucket, "Key": key},
         ExpiresIn=expires,
-        HttpMethod="PUT",
+        HttpMethod=method,
     )
+
+
+def list_s3_objects_with_prefix(
+    s3_client: BaseClient,
+    prefix: str,
+) -> list[str]:
+    """
+    Devuelve una lista de keys en S3 bajo el prefix dado.
+    """
+    paginator = s3_client.get_paginator("list_objects_v2")
+
+    keys: list[str] = []
+
+    for page in paginator.paginate(
+        Bucket=settings.aws_s3_bucket,
+        Prefix=prefix,
+    ):
+        contents = page.get("Contents", [])
+        for obj in contents:
+            key: str = obj["Key"]
+            keys.append(key)
+
+    return keys
 
 
 def _ensure_table_pk_only(

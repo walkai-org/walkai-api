@@ -4,6 +4,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.secrets import normalize_secret_name
+from app.schemas.volumes import VolumeOut
 
 
 class GPUProfile(StrEnum):
@@ -31,6 +32,7 @@ class JobCreate(BaseModel):
         default_factory=list,
         description="Existing Kubernetes secrets to mount via envFrom",
     )
+    input_id: int | None = None
 
     @field_validator("secret_names")
     @classmethod
@@ -72,16 +74,6 @@ class JobRunBase(BaseModel):
 
 class JobRunSummary(JobRunBase):
     k8s_job_name: str
-
-
-class VolumeOut(BaseModel):
-    id: int
-    pvc_name: str
-    size: int
-    key_prefix: str | None
-    is_input: bool
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class JobRunDetail(JobRunSummary):

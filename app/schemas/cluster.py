@@ -15,6 +15,7 @@ class GPUResources(BaseModel):
 class PodStatus(StrEnum):
     running = "Running"
     pending = "Pending"
+    pod_initializing = "PodInitializing"
     container_creating = "ContainerCreating"
     completed = "Completed"
     error = "Error"
