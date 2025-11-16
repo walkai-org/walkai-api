@@ -3,6 +3,16 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 
+class VolumeOut(BaseModel):
+    id: int
+    pvc_name: str
+    size: int
+    key_prefix: str | None
+    is_input: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class VolumeObject(BaseModel):
     key: str
     size: int
@@ -17,3 +27,20 @@ class VolumeListingOut(BaseModel):
     next_continuation_token: str | None = None
 
     model_config = ConfigDict(use_enum_values=True)
+
+
+class InputVolumeCreate(BaseModel):
+    storage: int
+
+
+class InputVolumeFileUpload(BaseModel):
+    volume_id: int
+    number_of_files: int
+
+
+class InputVolumeFileUploadOut(BaseModel):
+    presigneds: list[str]
+
+
+class InputVolumeCreateOut(BaseModel):
+    volume: VolumeOut

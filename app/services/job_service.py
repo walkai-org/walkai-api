@@ -487,13 +487,19 @@ def list_available_images(ecr_client: BaseClient) -> list[JobImage]:
     return images
 
 
+def _generate_volume_name(prefix: str = "vol", *, suffix_length: int = 8) -> str:
+    suffix = uuid4().hex[:suffix_length]
+    return f"{prefix}-{suffix}"
+
+
 def create_volume(
     db: Session,
     storage: int,
     is_input: bool,
     key_prefix: str | None = None,
+    pvc_name: str | None = None,
 ) -> Volume:
-    vol_name = str(uuid4())
+    vol_name = pvc_name or str(uuid4())
     vol = Volume(
         pvc_name=vol_name,
         size=storage,
@@ -505,6 +511,26 @@ def create_volume(
     db.flush()
     db.refresh(vol)
     return vol
+
+
+def create_input_volume_with_upload(
+    db: Session,
+    *,
+    user: User,
+    storage: int,
+) -> Volume:
+    volume_name = _generate_volume_name(prefix="input")
+    key_prefix = f"users/{user.id}/inputs/{volume_name}"
+    volume = create_volume(
+        db,
+        storage=storage,
+        is_input=True,
+        key_prefix=key_prefix,
+        pvc_name=volume_name,
+    )
+    db.commit()
+    db.refresh(volume)
+    return volume
 
 
 def create_job(db: Session, payload: JobCreate, user_id: int) -> Job:

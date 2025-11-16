@@ -399,6 +399,7 @@ def test_render_job_manifest_populates_gpu_limits():
         job_id=2,
         run_token="run-token-abc",
         api_base_url="https://api.example.com",
+        input_volume=None,
     )
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
@@ -423,6 +424,7 @@ def test_render_job_manifest_includes_secret_env_from():
         run_token="run-token-abc",
         api_base_url="https://api.example.com",
         secret_names=["api-token", "db-secret"],
+        input_volume=None,
     )
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]
@@ -442,6 +444,7 @@ def test_render_job_manifest_skips_gpu_limits_when_empty():
         job_id=20,
         run_token="tok",
         api_base_url="https://api.example.com",
+        input_volume=None,
     )
 
     container = manifest["spec"]["template"]["spec"]["containers"][0]

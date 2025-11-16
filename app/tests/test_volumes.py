@@ -7,6 +7,7 @@ from botocore.stub import Stubber
 
 from app.core.aws import get_s3_client
 from app.main import app
+from app.models.jobs import Volume
 from app.services import job_service
 
 
@@ -269,6 +270,62 @@ def test_download_volume_file_invalid_path(auth_client, db_session):
         resp = client.get(
             f"/volumes/{volume.id}/file",
             params={"key": "../secrets.txt"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid file path"
+
+
+def test_create_input_volume_returns_presigned_url(auth_client, db_session):
+    client, user = auth_client
+    s3_client = boto3.client(
+        "s3",
+        region_name="us-test-1",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+    )
+    app.dependency_overrides[get_s3_client] = lambda: s3_client
+    try:
+        resp = client.post(
+            "/volumes/inputs",
+            json={"path": "data/sample.txt", "storage": 3},
+        )
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    volume = payload["volume"]
+    upload = payload["upload"]
+
+    assert volume["is_input"] is True
+    assert volume["size"] == 3
+    assert volume["pvc_name"].startswith("input-")
+    assert len(volume["pvc_name"]) < 30
+    assert volume["key_prefix"].startswith(f"users/{user.id}/inputs/")
+    assert upload["key"] == f"{volume['key_prefix']}/data/sample.txt"
+    assert f"/{upload['key']}" in upload["url"]
+
+    db_volume = db_session.get(Volume, volume["id"])
+    assert db_volume is not None
+    assert db_volume.is_input is True
+    assert db_volume.key_prefix == volume["key_prefix"]
+
+
+def test_create_input_volume_validates_path(auth_client):
+    client, _ = auth_client
+
+    class _StubClient:
+        def generate_presigned_url(self, *args, **kwargs):
+            raise AssertionError("Presign should not be attempted")
+
+    app.dependency_overrides[get_s3_client] = lambda: _StubClient()
+    try:
+        resp = client.post(
+            "/volumes/inputs",
+            json={"path": "../secret.txt"},
         )
     finally:
         app.dependency_overrides.pop(get_s3_client, None)
