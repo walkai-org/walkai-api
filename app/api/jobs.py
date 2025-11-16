@@ -1,3 +1,5 @@
+from typing import Literal
+
 from botocore.client import BaseClient
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -5,7 +7,12 @@ from kubernetes import client
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.core.aws import get_ecr_client, get_s3_client, presign_put_url
+from app.core.aws import (
+    get_ecr_client,
+    get_s3_client,
+    list_s3_objects_with_prefix,
+    presign_url,
+)
 from app.core.database import get_db
 from app.core.k8s import get_batch, get_core
 from app.models.jobs import Job, JobRun
@@ -82,10 +89,14 @@ def get_job_run_detail(
 
 
 @router.get("/{job_id}/runs/{run_id}/presign")
-def presign_output_object(
+def presign_object(
     job_id: int,
     run_id: int,
     path: str = Query(..., description="Ruta relativa dentro de /opt/output"),
+    method: Literal["GET", "PUT"] = Query("PUT", description="Método HTTP a presignar"),
+    direction: Literal["input", "output"] = Query(
+        "output", description="Volumen sobre el que se hace el presign"
+    ),
     run_token: str = Header(..., alias="X-Run-Token"),
     db: Session = Depends(get_db),
     s3_client: BaseClient = Depends(get_s3_client),
@@ -98,15 +109,84 @@ def presign_output_object(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
-    s3_prefix = f"users/{job.created_by_id}/jobs/{job_id}/{run_id}/outputs"
-    volume = run.output_volume
-    volume.key_prefix = s3_prefix
-    db.commit()
+    if direction == "output":
+        volume = run.output_volume
+        if volume is None:
+            raise HTTPException(status_code=400, detail="Run has no output volume")
+        if volume.key_prefix is None:
+            volume.key_prefix = (
+                f"users/{job.created_by_id}/jobs/{job_id}/{run_id}/outputs"
+            )
+            db.commit()
+        prefix = volume.key_prefix
+        if method != "PUT":
+            raise HTTPException(
+                status_code=400,
+                detail="Outputs only support method=PUT for presign",
+            )
+    elif direction == "input":
+        volume = run.input_volume
+        if volume is None:
+            raise HTTPException(status_code=400, detail="Run has no input volume")
 
-    key = f"{s3_prefix.rstrip('/')}/{path.lstrip('/')}"
+        if volume.key_prefix is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Input volume without key_prefix configured",
+            )
+        prefix = volume.key_prefix
+        if method != "GET":
+            raise HTTPException(
+                status_code=400,
+                detail="Inputs only support method=GET for presign",
+            )
+    else:
+        raise HTTPException(status_code=400, detail="Invalid direction")
 
-    url = presign_put_url(s3_client, key)
+    key = f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+
+    url = presign_url(s3_client, key=key, method=method)
     return {"url": url}
+
+
+@router.get("/{job_id}/runs/{run_id}/inputs")
+def list_input_objects(
+    job_id: int,
+    run_id: int,
+    run_token: str = Header(..., alias="X-Run-Token"),
+    db: Session = Depends(get_db),
+    s3_client: BaseClient = Depends(get_s3_client),
+):
+    run = db.query(JobRun).filter(JobRun.id == run_id, JobRun.job_id == job_id).first()
+    if not run or run.run_token != run_token:
+        raise HTTPException(status_code=401, detail="Invalid run token")
+
+    volume = run.input_volume
+    if volume is None:
+        raise HTTPException(status_code=400, detail="Run has no input volume")
+
+    if not volume.key_prefix:
+        raise HTTPException(
+            status_code=500,
+            detail="Input volume has no key_prefix configured",
+        )
+
+    base_prefix = volume.key_prefix.rstrip("/")
+
+    prefix = base_prefix + "/"
+    keys = list_s3_objects_with_prefix(s3_client, prefix=prefix)
+
+    files: list[str] = []
+
+    for key in keys:
+        if key.startswith(prefix):
+            rel = key[len(prefix) :]
+        else:
+            rel = key
+        if rel:
+            files.append(rel)
+
+    return {"files": files}
 
 
 @router.get("/{job_id}/runs/{run_id}/logs")

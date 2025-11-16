@@ -19,9 +19,7 @@ from app.schemas.jobs import JobCreate, JobImage
 settings = get_settings()
 
 
-def _render_persistent_volume_claim(
-    *, name: str, storage: int, read_only: bool = False
-) -> dict[str, object]:
+def _render_persistent_volume_claim(*, name: str, storage: int) -> dict[str, object]:
     access_mode = "ReadWriteOnce"
     return {
         "apiVersion": "v1",
@@ -40,6 +38,7 @@ def _render_job_manifest(
     gpu: str,
     job_name: str,
     output_claim: str,
+    input_volume: Volume | None,
     run_id: int,
     job_id: int,
     run_token: str,
@@ -47,15 +46,33 @@ def _render_job_manifest(
     image_pull_secret: str | None = None,
     secret_names: Sequence[str] | None = None,
 ) -> dict[str, object]:
-    volume_mounts: list[dict[str, object]] = [
-        {"name": "output", "mountPath": "/opt/output"}
-    ]
+    volume_mounts_main: list[dict[str, object]] = []
+    volume_mounts_output: list[dict[str, object]] = []
+    volume_mounts_input: list[dict[str, object]] = []
+    volumes: list[dict[str, object]] = []
+
+    if input_volume:
+        volume_mounts_main.append({"name": "input", "mountPath": "/opt/input"})
+        volume_mounts_input.append({"name": "input", "mountPath": "/opt/input"})
+        volumes.append(
+            {
+                "name": "input",
+                "persistentVolumeClaim": {"claimName": input_volume.pvc_name},
+            }
+        )
+
+    if output_claim:
+        volume_mounts_main.append({"name": "output", "mountPath": "/opt/output"})
+        volume_mounts_output.append({"name": "output", "mountPath": "/opt/output"})
+        volumes.append(
+            {"name": "output", "persistentVolumeClaim": {"claimName": output_claim}}
+        )
 
     main: dict[str, object] = {
         "name": job_name,
         "image": image,
         "imagePullPolicy": "Always",
-        "volumeMounts": volume_mounts,
+        "volumeMounts": volume_mounts_main,
     }
 
     if secret_names:
@@ -168,12 +185,68 @@ def _render_job_manifest(
                 "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}},
             },
         ],
-        "volumeMounts": volume_mounts,
+        "volumeMounts": volume_mounts_output,
     }
 
-    volumes: list[dict[str, object]] = [
-        {"name": "output", "persistentVolumeClaim": {"claimName": output_claim}}
-    ]
+    input_list_endpoint = (
+        f"{api_base_url.rstrip('/')}/jobs/{job_id}/runs/{run_id}/inputs"
+    )
+
+    downloader_script = r"""
+        set -euo pipefail
+
+        apk add --no-cache curl jq ca-certificates >/dev/null
+
+        echo "Descargando inputs..."
+
+        RESP="$(
+        curl -fsSL \
+            -H "X-Run-Token: ${RUN_TOKEN}" \
+            "${INPUT_LIST_ENDPOINT}"
+        )"
+
+        echo "Respuesta de inputs: ${RESP}"
+
+        echo "$RESP" | jq -r '.files[]' | while read -r KEY; do
+            echo "Procesando ${KEY}..."
+
+            PRES="$(
+                curl -fsSL \
+                    -H "X-Run-Token: ${RUN_TOKEN}" \
+                    --get --data-urlencode "path=${KEY}" \
+                    --get --data-urlencode "method=GET" \
+                    --get --data-urlencode "direction=input" \
+                    "${PRESIGN_ENDPOINT}"
+            )"
+
+            URL="$(printf '%s' "$PRES" | jq -r '.url // empty')"
+            [ -n "$URL" ] || { echo "ERROR: presign no devolvió URL para ${KEY}"; exit 2; }
+
+            DEST="/opt/input/${KEY}"
+
+            mkdir -p "$(dirname "$DEST")"
+            echo "Descargando ${KEY} a ${DEST}..."
+            curl -fsSL "$URL" -o "$DEST"
+        done
+
+        echo "Inputs descargados correctamente."
+    """
+    init_containers: list[dict[str, object]] = []
+
+    if input_volume:
+        downloader = {
+            "name": f"{job_name}-downloader",
+            "image": "alpine:3.20",
+            "command": ["/bin/sh", "-lc"],
+            "args": [downloader_script],
+            "env": [
+                {"name": "RUN_TOKEN", "value": run_token},
+                {"name": "INPUT_LIST_ENDPOINT", "value": input_list_endpoint},
+                {"name": "PRESIGN_ENDPOINT", "value": presign_endpoint},
+            ],
+            "volumeMounts": volume_mounts_input,
+        }
+        init_containers.append(downloader)
 
     pod_spec: dict[str, object] = {
         "serviceAccountName": "api-client",
@@ -182,6 +255,9 @@ def _render_job_manifest(
         "containers": [main, uploader],
         "volumes": volumes,
     }
+
+    if init_containers:
+        pod_spec["initContainers"] = init_containers
 
     if image_pull_secret:
         pod_spec["imagePullSecrets"] = [{"name": image_pull_secret}]
@@ -411,9 +487,19 @@ def list_available_images(ecr_client: BaseClient) -> list[JobImage]:
     return images
 
 
-def create_volume(db: Session, storage: int, is_input: bool) -> Volume:
+def create_volume(
+    db: Session,
+    storage: int,
+    is_input: bool,
+    key_prefix: str | None = None,
+) -> Volume:
     vol_name = str(uuid4())
-    vol = Volume(pvc_name=vol_name, size=storage, is_input=is_input)
+    vol = Volume(
+        pvc_name=vol_name,
+        size=storage,
+        is_input=is_input,
+        key_prefix=key_prefix if is_input else None,
+    )
 
     db.add(vol)
     db.flush()
@@ -434,9 +520,15 @@ def create_job(db: Session, payload: JobCreate, user_id: int) -> Job:
     return job
 
 
-def create_job_run(db: Session, job: Job, out_volume: Volume):
+def create_job_run(
+    db: Session,
+    job: Job,
+    out_volume: Volume,
+    input_pvc: Volume | None = None,
+):
     run_token = uuid4().hex
     job_name = str(uuid4())
+
     job_run = JobRun(
         job_id=job.id,
         status=RunStatus.pending,
@@ -444,6 +536,7 @@ def create_job_run(db: Session, job: Job, out_volume: Volume):
         started_at=None,
         finished_at=None,
         output_volume_id=out_volume.id,
+        input_volume_id=input_pvc.id if input_pvc else None,
         run_token=run_token,
         k8s_job_name=job_name,
     )
@@ -482,11 +575,19 @@ def create_and_run_job(
 ):
     output_pvc = create_volume(db, is_input=False, storage=payload.storage)
     output_pvc_manifest = _render_persistent_volume_claim(
-        name=output_pvc.pvc_name, storage=payload.storage, read_only=False
+        name=output_pvc.pvc_name, storage=payload.storage
     )
 
+    input_vol = None
+    input_pvc_manifest = None
+    if payload.volume_id:
+        input_vol = get_volume(db, payload.volume_id)
+        input_pvc_manifest = _render_persistent_volume_claim(
+            name=input_vol.pvc_name, storage=input_vol.size
+        )
+
     job = create_job(db, payload=payload, user_id=user.id)
-    job_run = create_job_run(db, job, output_pvc)
+    job_run = create_job_run(db, job, output_pvc, input_pvc=input_vol)
 
     registry_secret_name = f"{job_run.k8s_job_name}-registry"
     authorization_token = _fetch_registry_token(ecr_client)
@@ -501,6 +602,7 @@ def create_and_run_job(
         gpu=job.gpu_profile,
         job_name=job_run.k8s_job_name,
         output_claim=output_pvc.pvc_name,
+        input_volume=input_vol,
         run_id=job_run.id,
         job_id=job.id,
         run_token=job_run.run_token,
@@ -510,6 +612,9 @@ def create_and_run_job(
     )
     apply_registry_secret(core, registry_secret_manifest)
     apply_pvc(core, output_pvc_manifest)
+    if input_pvc_manifest:
+        apply_pvc(core, input_pvc_manifest)
+
     job_resource = apply_job(batch, job_manifest)
     set_registry_secret_owner(
         core,

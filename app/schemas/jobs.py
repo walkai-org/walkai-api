@@ -31,6 +31,7 @@ class JobCreate(BaseModel):
         default_factory=list,
         description="Existing Kubernetes secrets to mount via envFrom",
     )
+    volume_id: int | None = None
 
     @field_validator("secret_names")
     @classmethod

@@ -378,7 +378,8 @@ def test_get_job_run_logs_returns_404_when_missing(auth_client, db_session):
 
 def test_render_pvc_manifest_shapes_storage():
     manifest = job_service._render_persistent_volume_claim(
-        name="vol-123", storage=5, read_only=False
+        name="vol-123",
+        storage=5,
     )
 
     assert manifest["apiVersion"] == "v1"
