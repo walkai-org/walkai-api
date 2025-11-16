@@ -7,6 +7,7 @@ from botocore.stub import Stubber
 
 from app.core.aws import get_s3_client
 from app.main import app
+from app.models.jobs import Volume
 from app.services import job_service
 
 
@@ -275,3 +276,85 @@ def test_download_volume_file_invalid_path(auth_client, db_session):
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Invalid file path"
+
+
+def test_create_input_volume_returns_volume_data(auth_client, db_session):
+    client, user = auth_client
+
+    resp = client.post(
+        "/volumes/inputs",
+        json={"storage": 3},
+    )
+
+    assert resp.status_code == 201
+    payload = resp.json()
+    volume = payload["volume"]
+
+    assert volume["is_input"] is True
+    assert volume["size"] == 3
+    assert volume["pvc_name"].startswith("input-")
+    assert volume["key_prefix"].startswith(f"users/{user.id}/inputs/")
+
+    db_volume = db_session.get(Volume, volume["id"])
+    assert db_volume is not None
+    assert db_volume.key_prefix == volume["key_prefix"]
+    assert db_volume.is_input is True
+
+
+def test_upload_file_returns_presigned_urls(auth_client, db_session, monkeypatch):
+    client, user = auth_client
+    input_volume = job_service.create_input_volume_with_upload(
+        db_session, user=user, storage=2
+    )
+
+    calls: list[dict[str, object]] = []
+
+    def _fake_presign(s3_client, *, key, method="PUT", expires=3600):
+        calls.append({"key": key, "method": method})
+        return f"https://example.com/{key}"
+
+    monkeypatch.setattr("app.api.volumes.presign_url", _fake_presign)
+
+    class _StubS3:
+        pass
+
+    app.dependency_overrides[get_s3_client] = lambda: _StubS3()
+    try:
+        resp = client.post(
+            "/volumes/inputs/file",
+            json={"volume_id": input_volume.id, "number_of_files": 2},
+        )
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+
+    assert resp.status_code == 201
+    assert resp.json() == {
+        "presigneds": [
+            f"https://example.com/{input_volume.key_prefix}",
+            f"https://example.com/{input_volume.key_prefix}",
+        ]
+    }
+    assert len(calls) == 2
+    assert all(call["key"] == input_volume.key_prefix for call in calls)
+
+
+def test_upload_file_rejects_non_input_volume(auth_client, db_session):
+    client, _ = auth_client
+    volume = job_service.create_volume(db_session, storage=1, is_input=False)
+    volume.key_prefix = "users/1/jobs/1/outputs"
+    db_session.commit()
+
+    class _StubS3:
+        pass
+
+    app.dependency_overrides[get_s3_client] = lambda: _StubS3()
+    try:
+        resp = client.post(
+            "/volumes/inputs/file",
+            json={"volume_id": volume.id, "number_of_files": 1},
+        )
+    finally:
+        app.dependency_overrides.pop(get_s3_client, None)
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Volume must be input vol"
