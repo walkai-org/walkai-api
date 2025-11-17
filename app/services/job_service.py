@@ -324,6 +324,19 @@ def set_registry_secret_owner(
     job_manifest: dict[str, object],
     job_resource,
 ):
+    owner_reference = _build_job_owner_reference(job_manifest, job_resource)
+
+    body = {"metadata": {"ownerReferences": [owner_reference]}}
+    return core.patch_namespaced_secret(
+        name=secret_name,
+        namespace=settings.namespace,
+        body=body,
+    )
+
+
+def _build_job_owner_reference(
+    job_manifest: dict[str, object], job_resource
+) -> dict[str, object]:
     metadata = getattr(job_resource, "metadata", None)
     job_uid = getattr(metadata, "uid", None) if metadata else None
     job_name = getattr(metadata, "name", None) if metadata else None
@@ -336,7 +349,7 @@ def set_registry_secret_owner(
     if not job_uid or not job_name:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Job metadata missing for registry secret owner reference",
+            detail="Job metadata missing for owner reference",
         )
 
     owner_reference = {
@@ -347,10 +360,20 @@ def set_registry_secret_owner(
         "controller": True,
         "blockOwnerDeletion": False,
     }
+    return owner_reference
 
+
+def set_pvc_owner(
+    core: client.CoreV1Api,
+    *,
+    pvc_name: str,
+    job_manifest: dict[str, object],
+    job_resource,
+):
+    owner_reference = _build_job_owner_reference(job_manifest, job_resource)
     body = {"metadata": {"ownerReferences": [owner_reference]}}
-    return core.patch_namespaced_secret(
-        name=secret_name,
+    return core.patch_namespaced_persistent_volume_claim(
+        name=pvc_name,
         namespace=settings.namespace,
         body=body,
     )
@@ -648,6 +671,19 @@ def create_and_run_job(
         job_manifest=job_manifest,
         job_resource=job_resource,
     )
+    set_pvc_owner(
+        core,
+        pvc_name=output_pvc.pvc_name,
+        job_manifest=job_manifest,
+        job_resource=job_resource,
+    )
+    if input_vol:
+        set_pvc_owner(
+            core,
+            pvc_name=input_vol.pvc_name,
+            job_manifest=job_manifest,
+            job_resource=job_resource,
+        )
 
     pod = wait_for_first_pod_of_job(core, job_run.k8s_job_name)
     if not pod:
@@ -670,7 +706,7 @@ def list_volumes(db: Session, *, is_input: bool | None = None) -> Sequence[Volum
     stmt = select(Volume)
     if is_input is not None:
         stmt = stmt.where(Volume.is_input.is_(is_input))
-    stmt = stmt.order_by(Volume.id)
+    stmt = stmt.order_by(Volume.id.desc())
     result = db.execute(stmt)
     return result.scalars().all()
 
