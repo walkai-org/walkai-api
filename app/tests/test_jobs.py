@@ -836,12 +836,18 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
             job_resource,
         )
 
+    pvc_owners: list[tuple[object, str, dict[str, object], object]] = []
+
+    def fake_set_pvc_owner(core, pvc_name, job_manifest, job_resource):
+        pvc_owners.append((core, pvc_name, job_manifest, job_resource))
+
     pod = SimpleNamespace(metadata=SimpleNamespace(name="pod-xyz"))
 
     monkeypatch.setattr(job_service, "apply_pvc", fake_apply_pvc)
     monkeypatch.setattr(job_service, "apply_job", fake_apply_job)
     monkeypatch.setattr(job_service, "apply_registry_secret", fake_apply_secret)
     monkeypatch.setattr(job_service, "set_registry_secret_owner", fake_set_secret_owner)
+    monkeypatch.setattr(job_service, "set_pvc_owner", fake_set_pvc_owner)
     monkeypatch.setattr(job_service, "wait_for_first_pod_of_job", lambda *a, **k: pod)
 
     job_run = job_service.create_and_run_job(
@@ -860,6 +866,9 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
     assert captured["secret_owner"][1] == f"{job_run.k8s_job_name}-registry"
     owner_job = captured["secret_owner"][3]
     assert owner_job.metadata.uid == "job-uid"
+    assert pvc_owners == [
+        (fake_core, job_run.output_volume.pvc_name, captured["job"][1], owner_job)
+    ]
     secret_manifest = captured["secret"][1]
     assert secret_manifest["metadata"]["name"] == f"{job_run.k8s_job_name}-registry"
     docker_config_raw = base64.b64decode(
@@ -903,6 +912,7 @@ def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_us
 
     captured_pvcs: list[tuple[object, dict]] = []
     captured_job: dict[str, object] = {}
+    pvc_owners: list[tuple[object, str]] = []
 
     def fake_apply_pvc(core, manifest):
         captured_pvcs.append((core, manifest))
@@ -919,6 +929,13 @@ def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_us
     monkeypatch.setattr(job_service, "apply_job", fake_apply_job)
     monkeypatch.setattr(job_service, "apply_registry_secret", lambda *a, **k: None)
     monkeypatch.setattr(job_service, "set_registry_secret_owner", lambda *a, **k: None)
+    monkeypatch.setattr(
+        job_service,
+        "set_pvc_owner",
+        lambda core, pvc_name, job_manifest, job_resource: pvc_owners.append(
+            (core, pvc_name)
+        ),
+    )
     monkeypatch.setattr(job_service, "wait_for_first_pod_of_job", lambda *a, **k: pod)
 
     job_run = job_service.create_and_run_job(
@@ -939,6 +956,10 @@ def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_us
     }
     assert input_claim in pod_spec["volumes"]  # type: ignore[index]
     assert pod_spec["initContainers"]
+    assert pvc_owners == [
+        (fake_core, job_run.output_volume.pvc_name),
+        (fake_core, input_volume.pvc_name),
+    ]
 
 
 def test_create_and_run_job_raises_when_no_pod(monkeypatch, db_session, test_user):
@@ -966,6 +987,7 @@ def test_create_and_run_job_raises_when_no_pod(monkeypatch, db_session, test_use
     monkeypatch.setattr(
         job_service, "set_registry_secret_owner", lambda *args, **kwargs: None
     )
+    monkeypatch.setattr(job_service, "set_pvc_owner", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         job_service, "wait_for_first_pod_of_job", lambda *args, **kwargs: None
     )
