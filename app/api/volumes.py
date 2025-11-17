@@ -13,10 +13,22 @@ from app.schemas.volumes import (
     InputVolumeFileUpload,
     InputVolumeFileUploadOut,
     VolumeListingOut,
+    VolumeOut,
 )
 from app.services import job_service
 
 router = APIRouter(prefix="/volumes", tags=["volumes"])
+
+
+@router.get("/", response_model=list[VolumeOut])
+def list_volumes(
+    is_input: bool | None = Query(
+        default=None, description="If set, filter volumes by input/output type"
+    ),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return job_service.list_volumes(db, is_input=is_input)
 
 
 @router.post(

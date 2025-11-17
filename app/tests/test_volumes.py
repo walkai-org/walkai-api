@@ -19,6 +19,52 @@ def _create_volume_with_prefix(db_session, *, prefix: str):
     return volume
 
 
+def test_list_volumes(auth_client, db_session):
+    client, user = auth_client
+    input_volume = job_service.create_input_volume_with_upload(
+        db_session, user=user, storage=3
+    )
+    output_volume = job_service.create_volume(db_session, storage=5, is_input=False)
+    output_volume.key_prefix = "users/99/jobs/123/outputs"
+    db_session.commit()
+    db_session.refresh(output_volume)
+
+    resp = client.get("/volumes")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert {vol["id"] for vol in payload} == {input_volume.id, output_volume.id}
+
+    input_payload = next(vol for vol in payload if vol["id"] == input_volume.id)
+    assert input_payload["is_input"] is True
+    assert input_payload["size"] == input_volume.size
+    assert input_payload["key_prefix"] == input_volume.key_prefix
+    assert input_payload["pvc_name"] == input_volume.pvc_name
+
+    output_payload = next(vol for vol in payload if vol["id"] == output_volume.id)
+    assert output_payload["is_input"] is False
+    assert output_payload["size"] == output_volume.size
+    assert output_payload["key_prefix"] == output_volume.key_prefix
+    assert output_payload["pvc_name"] == output_volume.pvc_name
+
+
+def test_list_volumes_filters_by_is_input(auth_client, db_session):
+    client, user = auth_client
+    input_volume = job_service.create_input_volume_with_upload(
+        db_session, user=user, storage=2
+    )
+    output_volume = job_service.create_volume(db_session, storage=4, is_input=False)
+    db_session.commit()
+
+    resp_inputs = client.get("/volumes", params={"is_input": True})
+    assert resp_inputs.status_code == 200
+    assert [vol["id"] for vol in resp_inputs.json()] == [input_volume.id]
+
+    resp_outputs = client.get("/volumes", params={"is_input": False})
+    assert resp_outputs.status_code == 200
+    assert [vol["id"] for vol in resp_outputs.json()] == [output_volume.id]
+
+
 def test_list_volume_objects_returns_files(auth_client, db_session):
     client, _ = auth_client
     prefix = "users/10/jobs/20/30/outputs"
@@ -321,8 +367,8 @@ def test_upload_file_returns_presigned_urls(auth_client, db_session, monkeypatch
     app.dependency_overrides[get_s3_client] = lambda: _StubS3()
     try:
         resp = client.post(
-            "/volumes/inputs/file",
-            json={"volume_id": input_volume.id, "number_of_files": 2},
+            "/volumes/inputs/presigneds",
+            json={"volume_id": input_volume.id, "file_names": ["aaa.txt", "bbb.txt"]},
         )
     finally:
         app.dependency_overrides.pop(get_s3_client, None)
@@ -330,12 +376,11 @@ def test_upload_file_returns_presigned_urls(auth_client, db_session, monkeypatch
     assert resp.status_code == 201
     assert resp.json() == {
         "presigneds": [
-            f"https://example.com/{input_volume.key_prefix}",
-            f"https://example.com/{input_volume.key_prefix}",
+            f"https://example.com/{input_volume.key_prefix}/aaa.txt",
+            f"https://example.com/{input_volume.key_prefix}/bbb.txt",
         ]
     }
     assert len(calls) == 2
-    assert all(call["key"] == input_volume.key_prefix for call in calls)
 
 
 def test_upload_file_rejects_non_input_volume(auth_client, db_session):
@@ -350,8 +395,8 @@ def test_upload_file_rejects_non_input_volume(auth_client, db_session):
     app.dependency_overrides[get_s3_client] = lambda: _StubS3()
     try:
         resp = client.post(
-            "/volumes/inputs/file",
-            json={"volume_id": volume.id, "number_of_files": 1},
+            "/volumes/inputs/presigneds",
+            json={"volume_id": volume.id, "file_names": ["aaa.txt"]},
         )
     finally:
         app.dependency_overrides.pop(get_s3_client, None)
