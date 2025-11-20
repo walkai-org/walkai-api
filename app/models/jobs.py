@@ -53,7 +53,13 @@ class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[int] = mapped_column(primary_key=True, init=False)
     image: Mapped[str]
-    gpu_profile: Mapped[GPUProfile] = mapped_column(Enum(GPUProfile))
+    gpu_profile: Mapped[GPUProfile] = mapped_column(
+        Enum(
+            GPUProfile,
+            name="gpuprofile",
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        )
+    )
     submitted_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         insert_default=func.now(),
@@ -85,7 +91,13 @@ class JobRun(Base):
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
     job: Mapped[Job] = relationship(Job, back_populates="runs", init=False)
 
-    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus))
+    status: Mapped[RunStatus] = mapped_column(
+        Enum(
+            RunStatus,
+            name="runstatus",
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        )
+    )
     run_token: Mapped[str]
     k8s_job_name: Mapped[str]
 
