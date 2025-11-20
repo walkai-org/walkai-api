@@ -17,7 +17,7 @@ from app.api import secrets as secrets_api
 from app.api.deps import get_current_user, require_admin
 from app.core.aws import get_ddb_oauth_table, get_ecr_client
 from app.core.config import get_settings, lifespan
-from app.core.database import engine, get_db, ping_database
+from app.core.database import get_db, ping_database
 from app.core.security import (
     create_access,
     gen_pkce,
@@ -26,7 +26,7 @@ from app.core.security import (
     hash_token,
     verify_password,
 )
-from app.models.users import Base, Invitation, SocialIdentity, User
+from app.models.users import Invitation, SocialIdentity, User
 from app.schemas.users import (
     InvitationAcceptIn,
     InvitationVerifyIn,
@@ -64,8 +64,6 @@ SCOPES = "read:user user:email"
 JWT_SECRET = settings.jwt_secret
 JWT_ALGO = settings.jwt_algo
 
-if settings.app_env != "test":  # avoid touching external DB during tests
-    Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="walk:ai API", version="0.1.0", lifespan=lifespan)
 
