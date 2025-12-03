@@ -12,7 +12,7 @@ from app.schemas.tokens import (
 )
 from app.services import pat_service
 
-router = APIRouter(prefix="/users/me/tokens", tags=["personal-access-tokens"])
+router = APIRouter(prefix="/users/me/tokens", tags=["personal access tokens"])
 
 
 @router.get("/", response_model=list[PersonalAccessTokenOut])
