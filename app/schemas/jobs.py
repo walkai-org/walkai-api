@@ -24,6 +24,13 @@ class RunStatus(StrEnum):
     cancelled = "cancelled"
 
 
+class JobPriority(StrEnum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    extra_high = "extra-high"
+
+
 class JobCreate(BaseModel):
     image: str
     gpu: GPUProfile
@@ -33,6 +40,7 @@ class JobCreate(BaseModel):
         description="Existing Kubernetes secrets to mount via envFrom",
     )
     input_id: int | None = None
+    priority: JobPriority = Field(default=JobPriority.medium)
 
     @field_validator("secret_names")
     @classmethod
@@ -48,6 +56,23 @@ class JobCreate(BaseModel):
             seen.add(normalized_value)
             normalized.append(normalized_value)
         return normalized
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def normalize_priority(cls, value: JobPriority | str | None) -> JobPriority:
+        if value is None:
+            return JobPriority.medium
+        if isinstance(value, JobPriority):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower().replace("_", "-")
+            try:
+                return JobPriority(normalized)
+            except ValueError:
+                raise ValueError(
+                    "priority must be one of: low, medium, high, extra-high"
+                )
+        return value
 
 
 class JobRunOut(BaseModel):
@@ -93,6 +118,7 @@ class JobOut(BaseModel):
     id: int
     image: str
     gpu_profile: GPUProfile
+    priority: JobPriority
     submitted_at: datetime
     created_by_id: int
     latest_run: JobRunSummary | None
@@ -104,6 +130,7 @@ class JobDetailOut(BaseModel):
     id: int
     image: str
     gpu_profile: GPUProfile
+    priority: JobPriority
     submitted_at: datetime
     created_by_id: int
     runs: list[JobRunBase]

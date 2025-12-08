@@ -16,7 +16,7 @@ from app.core.aws import get_ecr_client, get_s3_client
 from app.core.k8s import get_batch, get_core
 from app.main import app
 from app.models.jobs import JobRun, RunStatus
-from app.schemas.jobs import GPUProfile, JobCreate
+from app.schemas.jobs import GPUProfile, JobCreate, JobPriority
 from app.services import job_service
 
 
@@ -68,6 +68,7 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
     assert captured["payload"].gpu == GPUProfile.g1_10
     assert captured["payload"].storage == 4
     assert captured["payload"].secret_names == ["api-token", "db-secret"]
+    assert captured["payload"].priority == JobPriority.medium
     assert captured["user"].id == user.id
 
 
@@ -92,6 +93,7 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
     assert job_item["id"] == job.id
     assert job_item["image"] == payload.image
     assert job_item["gpu_profile"] == payload.gpu.value
+    assert job_item["priority"] == JobPriority.medium.value
     assert job_item["created_by_id"] == user.id
     assert job_item["submitted_at"]
     assert job_item["latest_run"] == {
@@ -204,6 +206,7 @@ def test_get_job_detail_returns_runs_without_volume_data(auth_client, db_session
     assert data["id"] == job.id
     assert data["runs"]
     assert len(data["runs"]) == 1
+    assert data["priority"] == JobPriority.medium.value
     run_data = data["runs"][0]
     assert run_data["id"] == run.id
     assert run_data["status"] == run.status.value
@@ -558,6 +561,24 @@ def test_render_job_manifest_populates_gpu_limits():
     )
 
 
+def test_render_job_manifest_sets_priority_class():
+    manifest = job_service._render_job_manifest(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        job_name="job-123",
+        output_claim="claim-1",
+        run_id=1,
+        job_id=2,
+        run_token="run-token-abc",
+        api_base_url="https://api.example.com",
+        input_volume=None,
+        priority=JobPriority.high,
+    )
+
+    pod_spec = manifest["spec"]["template"]["spec"]
+    assert pod_spec["priorityClassName"] == "nos-priority-high"
+
+
 def test_render_job_manifest_includes_secret_env_from():
     manifest = job_service._render_job_manifest(
         image="repo/image:tag",
@@ -773,6 +794,8 @@ def test_create_job_run_links_job_and_volume(db_session, test_user):
         db_session, storage=payload.storage, is_input=False
     )
 
+    assert job.priority == JobPriority.medium
+
     run = job_service.create_job_run(db_session, job, volume)
 
     assert run.job_id == job.id
@@ -799,6 +822,21 @@ def test_job_create_rejects_duplicate_secret_names():
             gpu=GPUProfile.g1_10,
             secret_names=["dup-secret", "dup-secret"],
         )
+
+
+def test_job_create_normalizes_priority_label():
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        priority="EXTRA_HIGH",
+    )
+
+    assert payload.priority == JobPriority.extra_high
+
+
+def test_job_create_rejects_unknown_priority():
+    with pytest.raises(ValidationError):
+        JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, priority="urgent")
 
 
 def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
@@ -882,6 +920,7 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
     assert registry_entry["username"] == "AWS"
     assert registry_entry["password"] == "super-secret-token"
     pod_spec = captured["job"][1]["spec"]["template"]["spec"]
+    assert pod_spec["priorityClassName"] == "nos-priority-medium"
     assert pod_spec["imagePullSecrets"] == [
         {"name": f"{job_run.k8s_job_name}-registry"}
     ]
@@ -900,6 +939,7 @@ def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_us
         gpu=GPUProfile.g2_20,
         storage=4,
         input_id=input_volume.id,
+        priority=JobPriority.extra_high,
     )
     fake_core = object()
     fake_batch = object()
@@ -950,6 +990,7 @@ def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_us
     batch_obj, job_manifest = captured_job["value"]
     assert batch_obj is fake_batch
     pod_spec = job_manifest["spec"]["template"]["spec"]
+    assert pod_spec["priorityClassName"] == "nos-priority-extra-high"
     input_claim = {
         "name": "input",
         "persistentVolumeClaim": {"claimName": input_volume.pvc_name},

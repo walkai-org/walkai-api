@@ -16,7 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.config import get_settings
 from app.core.database import Base
 from app.models.users import User
-from app.schemas.jobs import GPUProfile, RunStatus
+from app.schemas.jobs import GPUProfile, JobPriority, RunStatus
 
 
 def _normalize_started_at(
@@ -66,9 +66,19 @@ class Job(Base):
         server_default=func.now(),
         init=False,
     )
-
     created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_by: Mapped[User] = relationship(back_populates="jobs", init=False)
+
+    priority: Mapped[JobPriority] = mapped_column(
+        "priority_class",
+        Enum(
+            JobPriority,
+            name="jobpriority",
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        ),
+        default=JobPriority.medium,
+        server_default=JobPriority.medium.value,
+    )
 
     runs: Mapped[list[JobRun]] = relationship(
         "JobRun", back_populates="job", init=False
