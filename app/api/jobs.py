@@ -179,10 +179,7 @@ def list_input_objects(
     files: list[str] = []
 
     for key in keys:
-        if key.startswith(prefix):
-            rel = key[len(prefix) :]
-        else:
-            rel = key
+        rel = key[len(prefix) :] if key.startswith(prefix) else key
         if rel:
             files.append(rel)
 

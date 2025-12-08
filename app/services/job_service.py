@@ -14,9 +14,19 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.config import get_settings
 from app.models.jobs import Job, JobRun, RunStatus, Volume
 from app.models.users import User
-from app.schemas.jobs import JobCreate, JobImage
+from app.schemas.jobs import JobCreate, JobImage, JobPriority
 
 settings = get_settings()
+
+
+def _priority_class_name(priority: JobPriority) -> str:
+    mapping: dict[JobPriority, str] = {
+        JobPriority.low: "nos-priority-low",
+        JobPriority.medium: "nos-priority-medium",
+        JobPriority.high: "nos-priority-high",
+        JobPriority.extra_high: "nos-priority-extra-high",
+    }
+    return mapping[priority]
 
 
 def _render_persistent_volume_claim(*, name: str, storage: int) -> dict[str, object]:
@@ -45,6 +55,7 @@ def _render_job_manifest(
     api_base_url: str,
     image_pull_secret: str | None = None,
     secret_names: Sequence[str] | None = None,
+    priority: JobPriority = JobPriority.medium,
 ) -> dict[str, object]:
     volume_mounts_main: list[dict[str, object]] = []
     volume_mounts_output: list[dict[str, object]] = []
@@ -254,6 +265,7 @@ def _render_job_manifest(
         "securityContext": {"fsGroup": 1000},
         "containers": [main, uploader],
         "volumes": volumes,
+        "priorityClassName": _priority_class_name(priority),
     }
 
     if init_containers:
@@ -560,6 +572,7 @@ def create_job(db: Session, payload: JobCreate, user_id: int) -> Job:
     job = Job(
         image=payload.image,
         gpu_profile=payload.gpu,
+        priority=payload.priority,
         created_by_id=user_id,
     )
     db.add(job)
@@ -658,6 +671,7 @@ def create_and_run_job(
         api_base_url=settings.api_base_url,
         image_pull_secret=registry_secret_name,
         secret_names=payload.secret_names,
+        priority=job.priority,
     )
     apply_registry_secret(core, registry_secret_manifest)
     apply_pvc(core, output_pvc_manifest)
