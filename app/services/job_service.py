@@ -587,9 +587,11 @@ def create_job_run(
     job: Job,
     out_volume: Volume,
     input_pvc: Volume | None = None,
+    secret_names: Sequence[str] | None = None,
 ):
     run_token = uuid4().hex
     job_name = str(uuid4())
+    normalized_secrets = list(secret_names) if secret_names else []
 
     job_run = JobRun(
         job_id=job.id,
@@ -601,6 +603,7 @@ def create_job_run(
         input_volume_id=input_pvc.id if input_pvc else None,
         run_token=run_token,
         k8s_job_name=job_name,
+        secret_names=normalized_secrets,
     )
     db.add(job_run)
     db.flush()
@@ -649,7 +652,13 @@ def create_and_run_job(
         )
 
     job = create_job(db, payload=payload, user_id=user.id)
-    job_run = create_job_run(db, job, output_pvc, input_pvc=input_vol)
+    job_run = create_job_run(
+        db,
+        job,
+        output_pvc,
+        input_pvc=input_vol,
+        secret_names=payload.secret_names,
+    )
 
     registry_secret_name = f"{job_run.k8s_job_name}-registry"
     authorization_token = _fetch_registry_token(ecr_client)
@@ -671,6 +680,114 @@ def create_and_run_job(
         api_base_url=settings.api_base_url,
         image_pull_secret=registry_secret_name,
         secret_names=payload.secret_names,
+        priority=job.priority,
+    )
+    apply_registry_secret(core, registry_secret_manifest)
+    apply_pvc(core, output_pvc_manifest)
+    if input_pvc_manifest:
+        apply_pvc(core, input_pvc_manifest)
+
+    job_resource = apply_job(batch, job_manifest)
+    set_registry_secret_owner(
+        core,
+        secret_name=registry_secret_name,
+        job_manifest=job_manifest,
+        job_resource=job_resource,
+    )
+    set_pvc_owner(
+        core,
+        pvc_name=output_pvc.pvc_name,
+        job_manifest=job_manifest,
+        job_resource=job_resource,
+    )
+    if input_vol:
+        set_pvc_owner(
+            core,
+            pvc_name=input_vol.pvc_name,
+            job_manifest=job_manifest,
+            job_resource=job_resource,
+        )
+
+    pod = wait_for_first_pod_of_job(core, job_run.k8s_job_name)
+    if not pod:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, detail=f"Could not create pod for job {job.id}"
+        )
+    job_run.k8s_pod_name = pod.metadata.name  # type: ignore
+    db.commit()
+    return job_run
+
+
+def rerun_job(
+    core: client.CoreV1Api,
+    batch: client.BatchV1Api,
+    ecr_client: BaseClient,
+    db: Session,
+    job_id: int,
+):
+    stmt = (
+        select(Job)
+        .options(
+            selectinload(Job.runs).selectinload(JobRun.output_volume),
+            selectinload(Job.runs).selectinload(JobRun.input_volume),
+        )
+        .where(Job.id == job_id)
+    )
+    job = db.execute(stmt).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    latest_run = job.latest_run
+    if latest_run is None:
+        raise HTTPException(status_code=400, detail="Job has no previous runs to rerun")
+
+    output_volume = latest_run.output_volume
+    if output_volume is None:
+        raise HTTPException(status_code=400, detail="Latest run has no output volume")
+
+    secret_names = latest_run.secret_names or []
+
+    output_pvc = create_volume(db, is_input=False, storage=output_volume.size)
+    output_pvc_manifest = _render_persistent_volume_claim(
+        name=output_pvc.pvc_name, storage=output_volume.size
+    )
+
+    input_vol = latest_run.input_volume
+    input_pvc_manifest = None
+    if input_vol:
+        input_pvc_manifest = _render_persistent_volume_claim(
+            name=input_vol.pvc_name, storage=input_vol.size
+        )
+
+    job_run = create_job_run(
+        db,
+        job,
+        output_pvc,
+        input_pvc=input_vol,
+        secret_names=secret_names,
+    )
+
+    registry_secret_name = f"{job_run.k8s_job_name}-registry"
+    authorization_token = _fetch_registry_token(ecr_client)
+    registry_secret_manifest = _render_registry_secret(
+        name=registry_secret_name,
+        registry=settings.ecr_url,
+        token=authorization_token,
+    )
+
+    job_manifest = _render_job_manifest(
+        image=job.image,
+        gpu=job.gpu_profile,
+        job_name=job_run.k8s_job_name,
+        output_claim=output_pvc.pvc_name,
+        input_volume=input_vol,
+        run_id=job_run.id,
+        job_id=job.id,
+        run_token=job_run.run_token,
+        api_base_url=settings.api_base_url,
+        image_pull_secret=registry_secret_name,
+        secret_names=secret_names,
         priority=job.priority,
     )
     apply_registry_secret(core, registry_secret_manifest)

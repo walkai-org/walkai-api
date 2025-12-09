@@ -4,6 +4,7 @@ import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Enum,
@@ -81,7 +82,10 @@ class Job(Base):
     )
 
     runs: Mapped[list[JobRun]] = relationship(
-        "JobRun", back_populates="job", init=False
+        "JobRun",
+        back_populates="job",
+        init=False,
+        order_by=lambda: JobRun.id.desc(),  # <-- key line
     )
 
     @property
@@ -119,6 +123,7 @@ class JobRun(Base):
     k8s_pod_name: Mapped[str | None] = mapped_column(default=None)
     started_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
     finished_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
+    secret_names: Mapped[list[str]] = mapped_column(JSON, default_factory=list)
 
     input_volume_id: Mapped[int | None] = mapped_column(
         ForeignKey("volumes.id"), default=None

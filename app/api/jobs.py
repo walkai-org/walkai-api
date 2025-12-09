@@ -44,6 +44,19 @@ def submit_job(
     return JobRunOut(job_id=job_run.job_id, pod=job_run.k8s_pod_name)
 
 
+@router.post("/{job_id}/runs", response_model=JobRunOut)
+def rerun_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    core: client.CoreV1Api = Depends(get_core),
+    batch: client.BatchV1Api = Depends(get_batch),
+    ecr_client: BaseClient = Depends(get_ecr_client),
+    _: User = Depends(get_current_user),
+):
+    job_run = job_service.rerun_job(core, batch, ecr_client, db, job_id)
+    return JobRunOut(job_id=job_run.job_id, pod=job_run.k8s_pod_name)
+
+
 @router.get("/", response_model=list[JobOut])
 def list_jobs(
     db: Session = Depends(get_db),

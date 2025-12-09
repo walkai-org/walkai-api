@@ -72,6 +72,44 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
     assert captured["user"].id == user.id
 
 
+def test_rerun_job_endpoint_calls_service(auth_client, db_session, monkeypatch):
+    client, _ = auth_client
+    fake_core = object()
+    fake_batch = object()
+    fake_ecr = object()
+
+    app.dependency_overrides[get_core] = lambda: fake_core
+    app.dependency_overrides[get_batch] = lambda: fake_batch
+    app.dependency_overrides[get_ecr_client] = lambda: fake_ecr
+
+    captured: dict[str, object] = {}
+
+    def fake_rerun(core, batch, ecr_client, db, job_id: int):
+        captured["core"] = core
+        captured["batch"] = batch
+        captured["ecr_client"] = ecr_client
+        captured["db"] = db
+        captured["job_id"] = job_id
+        return SimpleNamespace(job_id=job_id, k8s_pod_name="pod-rerun")
+
+    monkeypatch.setattr(job_service, "rerun_job", fake_rerun)
+
+    try:
+        response = client.post("/jobs/123/runs")
+    finally:
+        app.dependency_overrides.pop(get_core, None)
+        app.dependency_overrides.pop(get_batch, None)
+        app.dependency_overrides.pop(get_ecr_client, None)
+
+    assert response.status_code == 200
+    assert response.json() == {"job_id": 123, "pod": "pod-rerun"}
+    assert captured["core"] is fake_core
+    assert captured["batch"] is fake_batch
+    assert captured["ecr_client"] is fake_ecr
+    assert captured["db"] is db_session
+    assert captured["job_id"] == 123
+
+
 def test_list_jobs_returns_jobs(auth_client, db_session):
     client, user = auth_client
     payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g2_20, storage=6)
@@ -248,6 +286,7 @@ def test_get_job_run_detail_includes_volume_information(auth_client, db_session)
     assert run_data["status"] == run.status.value
     assert run_data["k8s_job_name"] == run.k8s_job_name
     assert run_data["k8s_pod_name"] == run.k8s_pod_name
+    assert run_data["secret_names"] == []
     assert run_data["output_volume"] == {
         "id": output_volume.id,
         "pvc_name": output_volume.pvc_name,
@@ -283,6 +322,7 @@ def test_get_job_run_by_pod_returns_job_and_run(auth_client, db_session):
     assert data["id"] == run.id
     assert data["status"] == run.status.value
     assert data["output_volume"]["id"] == output_volume.id
+    assert data["secret_names"] == []
 
 
 def test_get_job_run_by_pod_returns_404_when_missing(auth_client):
@@ -932,6 +972,55 @@ def test_create_and_run_job_commits_job_run(monkeypatch, db_session, test_user):
     assert stored_run.output_volume_id == job_run.output_volume_id
 
 
+def test_create_and_run_job_persists_secret_names(monkeypatch, db_session, test_user):
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        storage=2,
+        secret_names=["api-token", "db-secret"],
+    )
+    fake_core = object()
+    fake_batch = object()
+    encoded_token = base64.b64encode(b"AWS:token").decode("utf-8")
+    fake_ecr = SimpleNamespace(
+        get_authorization_token=lambda: {
+            "authorizationData": [{"authorizationToken": encoded_token}]
+        }
+    )
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(job_service, "apply_pvc", lambda *a, **k: None)
+    monkeypatch.setattr(job_service, "apply_registry_secret", lambda *a, **k: None)
+    monkeypatch.setattr(job_service, "set_registry_secret_owner", lambda *a, **k: None)
+    monkeypatch.setattr(job_service, "set_pvc_owner", lambda *a, **k: None)
+
+    def fake_apply_job(batch, manifest):
+        captured["manifest"] = manifest
+        return SimpleNamespace(
+            metadata=SimpleNamespace(name=manifest["metadata"]["name"], uid="uid")
+        )
+
+    monkeypatch.setattr(job_service, "apply_job", fake_apply_job)
+    monkeypatch.setattr(
+        job_service,
+        "wait_for_first_pod_of_job",
+        lambda *a, **k: SimpleNamespace(metadata=SimpleNamespace(name="pod-secrets")),
+    )
+
+    job_run = job_service.create_and_run_job(
+        fake_core, fake_batch, fake_ecr, db_session, payload, test_user
+    )
+
+    assert job_run.secret_names == ["api-token", "db-secret"]
+    pod_spec = captured["manifest"]["spec"]["template"]["spec"]
+    main = pod_spec["containers"][0]
+    assert main["envFrom"] == [
+        {"secretRef": {"name": "api-token"}},
+        {"secretRef": {"name": "db-secret"}},
+    ]
+
+
 def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_user):
     input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
     payload = JobCreate(
@@ -1001,6 +1090,93 @@ def test_create_and_run_job_mounts_input_volume(monkeypatch, db_session, test_us
         (fake_core, job_run.output_volume.pvc_name),
         (fake_core, input_volume.pvc_name),
     ]
+
+
+def test_rerun_job_uses_latest_run_defaults(monkeypatch, db_session, test_user):
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g2_20,
+        storage=3,
+        priority=JobPriority.high,
+    )
+    job = job_service.create_job(db_session, payload, test_user.id)
+    initial_output = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    input_volume = job_service.create_volume(db_session, storage=1, is_input=True)
+    initial_run = job_service.create_job_run(
+        db_session,
+        job,
+        initial_output,
+        input_pvc=input_volume,
+        secret_names=["api-token", "db-secret"],
+    )
+    initial_run.k8s_pod_name = "pod-old"
+    db_session.commit()
+
+    fake_core = object()
+    fake_batch = object()
+    encoded_token = base64.b64encode(b"AWS:runtoken").decode("utf-8")
+    fake_ecr = SimpleNamespace(
+        get_authorization_token=lambda: {
+            "authorizationData": [{"authorizationToken": encoded_token}]
+        }
+    )
+
+    captured: dict[str, object] = {"pvcs": []}
+
+    def fake_apply_pvc(core, manifest):
+        captured["pvcs"].append((core, manifest))
+
+    def fake_apply_job(batch, manifest):
+        captured["manifest"] = manifest
+        return SimpleNamespace(
+            metadata=SimpleNamespace(name=manifest["metadata"]["name"], uid="uid-2")
+        )
+
+    monkeypatch.setattr(job_service, "apply_pvc", fake_apply_pvc)
+    monkeypatch.setattr(job_service, "apply_job", fake_apply_job)
+    monkeypatch.setattr(job_service, "apply_registry_secret", lambda *a, **k: None)
+    monkeypatch.setattr(job_service, "set_registry_secret_owner", lambda *a, **k: None)
+    monkeypatch.setattr(
+        job_service,
+        "set_pvc_owner",
+        lambda *a, pvc_name, **k: captured.setdefault("owners", []).append(pvc_name),
+    )
+    monkeypatch.setattr(
+        job_service,
+        "wait_for_first_pod_of_job",
+        lambda *a, **k: SimpleNamespace(metadata=SimpleNamespace(name="pod-rerun")),
+    )
+
+    new_run = job_service.rerun_job(fake_core, fake_batch, fake_ecr, db_session, job.id)
+
+    assert new_run.job_id == job.id
+    assert new_run.id != initial_run.id
+    assert new_run.output_volume.size == initial_output.size
+    assert new_run.input_volume_id == input_volume.id
+    assert new_run.secret_names == ["api-token", "db-secret"]
+    pod_spec = captured["manifest"]["spec"]["template"]["spec"]
+    main = pod_spec["containers"][0]
+    assert pod_spec["priorityClassName"] == "nos-priority-high"
+    assert main["envFrom"] == [
+        {"secretRef": {"name": "api-token"}},
+        {"secretRef": {"name": "db-secret"}},
+    ]
+    pvc_names = {manifest["metadata"]["name"] for _, manifest in captured["pvcs"]}
+    assert new_run.output_volume.pvc_name in pvc_names
+    assert input_volume.pvc_name in pvc_names
+
+
+def test_rerun_job_requires_previous_run(db_session, test_user):
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g7_79, storage=2)
+    job = job_service.create_job(db_session, payload, test_user.id)
+
+    with pytest.raises(job_service.HTTPException) as exc_info:
+        job_service.rerun_job(object(), object(), object(), db_session, job.id)
+
+    assert exc_info.value.status_code == 400
+    assert "no previous runs" in exc_info.value.detail
 
 
 def test_create_and_run_job_raises_when_no_pod(monkeypatch, db_session, test_user):
