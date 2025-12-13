@@ -19,6 +19,7 @@ schedulekind_enum = postgresql.ENUM(
     "once",
     "cron",
     name="schedulekind",
+    create_type=False,
 )
 
 
