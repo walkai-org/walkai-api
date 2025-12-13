@@ -22,6 +22,15 @@ FastAPI service powering the walk:ai backend APIs.
 
 Copy `.env.example` to `.env` and provide the values required by your deployment.
 - `DATABASE_URL` can point to PostgreSQL in shared environments or a local SQLite file such as `sqlite:///./data/dev.db` for lightweight development.
+- `SCHEDULE_WORKER_ENABLED` (default: `false`) enables the in-process scheduler loop used for recurring job reruns. Keep it off for dev `--reload` sessions.
+- `SCHEDULE_INTERVAL_SECONDS` (default: `30`) controls how frequently due schedules are evaluated when the worker is enabled.
+
+## Job scheduling
+
+- Create schedules after a job has at least one run using the API-only endpoints:
+  - `POST /jobs/{job_id}/schedules` (body: `{"kind": "once", "run_at": "<UTC ISO>"}` or `{"kind": "cron", "cron": "<expr>"}`)
+  - `GET /jobs/{job_id}/schedules` to list, `GET /jobs/{job_id}/schedules/{schedule_id}` to fetch, and `DELETE /jobs/{job_id}/schedules/{schedule_id}` to remove.
+- All datetimes and cron execution are evaluated in UTC. Missed occurrences are retried; overlapping runs are skipped until the current run finishes.
 
 ## Create a dev cluster
 
