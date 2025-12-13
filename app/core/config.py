@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 
 from fastapi import FastAPI
@@ -48,6 +49,13 @@ class Settings(BaseSettings):
     ddb_table_cluster_cache: str = Field(alias="DYNAMODB_CLUSTER_CACHE_TABLE")
     ddb_endpoint: str | None = Field(default=None, alias="DYNAMODB_ENDPOINT")
 
+    schedule_worker_enabled: bool = Field(
+        default=False, alias="SCHEDULE_WORKER_ENABLED"
+    )
+    schedule_interval_seconds: int = Field(
+        default=30, alias="SCHEDULE_INTERVAL_SECONDS", ge=1
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -63,6 +71,7 @@ async def lifespan(app: FastAPI):
         create_ddb_oauth_table,
     )
     from app.core.k8s import build_kubernetes_api_client
+    from app.workers.scheduler import scheduler_loop
 
     api_client = build_kubernetes_api_client()
     app.state.core = client.CoreV1Api(api_client)
@@ -80,9 +89,18 @@ async def lifespan(app: FastAPI):
     ddb_cluster_table = create_ddb_cluster_cache_table()
     app.state.ddb_cluster_table = ddb_cluster_table
 
+    scheduler_task = None
+    settings = get_settings()
+    if settings.schedule_worker_enabled:
+        scheduler_task = asyncio.create_task(scheduler_loop(app))
+
     try:
         yield
     finally:
+        if scheduler_task:
+            scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler_task
         api_client.close()
         close_s3 = getattr(s3_client, "close", None)
         if callable(close_s3):
