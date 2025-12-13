@@ -1,7 +1,7 @@
 from typing import Literal
 
 from botocore.client import BaseClient
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from kubernetes import client
 from sqlalchemy.orm import Session
@@ -26,7 +26,8 @@ from app.schemas.jobs import (
     JobRunDetail,
     JobRunOut,
 )
-from app.services import job_service
+from app.schemas.schedules import ScheduleCreate, ScheduleOut
+from app.services import job_service, schedule_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -55,6 +56,54 @@ def rerun_job(
 ):
     job_run = job_service.rerun_job(core, batch, ecr_client, db, job_id)
     return JobRunOut(job_id=job_run.job_id, pod=job_run.k8s_pod_name)
+
+
+@router.post(
+    "/{job_id}/schedules",
+    response_model=ScheduleOut,
+    status_code=201,
+)
+def create_job_schedule(
+    job_id: int,
+    payload: ScheduleCreate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return schedule_service.create_schedule(db, job_id, payload)
+
+
+@router.get("/{job_id}/schedules", response_model=list[ScheduleOut])
+def list_job_schedules(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return schedule_service.list_schedules(db, job_id)
+
+
+@router.get("/{job_id}/schedules/{schedule_id}", response_model=ScheduleOut)
+def get_job_schedule(
+    job_id: int,
+    schedule_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return schedule_service.get_schedule(db, job_id, schedule_id)
+
+
+@router.delete(
+    "/{job_id}/schedules/{schedule_id}",
+    status_code=204,
+    response_class=Response,
+)
+def delete_job_schedule(
+    job_id: int,
+    schedule_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    schedule_service.delete_schedule(db, job_id, schedule_id)
+    return Response(status_code=204)
 
 
 @router.get("/", response_model=list[JobOut])
