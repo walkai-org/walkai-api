@@ -9,6 +9,8 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
+    String,
     UniqueConstraint,
     func,
 )
@@ -18,6 +20,7 @@ from app.core.config import get_settings
 from app.core.database import Base
 from app.models.users import User
 from app.schemas.jobs import GPUProfile, JobPriority, RunStatus
+from app.schemas.schedules import ScheduleKind
 
 
 def _normalize_started_at(
@@ -96,6 +99,62 @@ class Job(Base):
             self.runs,
             key=lambda run: (_normalize_started_at(run.started_at), run.id),
         )
+
+    schedules: Mapped[list[JobSchedule]] = relationship(
+        "JobSchedule",
+        back_populates="job",
+        init=False,
+        order_by=lambda: JobSchedule.id.desc(),
+    )
+
+
+class JobSchedule(Base):
+    __tablename__ = "job_schedules"
+
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"))
+    job: Mapped[Job] = relationship(back_populates="schedules", init=False)
+
+    kind: Mapped[ScheduleKind] = mapped_column(
+        Enum(
+            ScheduleKind,
+            name="schedulekind",
+            values_callable=lambda enum_cls: [e.value for e in enum_cls],
+        )
+    )
+    run_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    cron: Mapped[str | None] = mapped_column(String(255), default=None)
+    next_run_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_run_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        server_default=func.now(),
+        init=False,
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        server_default=func.now(),
+        onupdate=func.now(),
+        server_onupdate=func.now(),
+        init=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "(kind = 'once' AND run_at IS NOT NULL AND cron IS NULL) OR "
+            "(kind = 'cron' AND cron IS NOT NULL)",
+            name="ck_job_schedules_kind_fields",
+        ),
+        Index("ix_job_schedules_next_run_at", "next_run_at"),
+    )
 
 
 class JobRun(Base):

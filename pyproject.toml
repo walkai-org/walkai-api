@@ -18,6 +18,7 @@ dependencies = [
     "boto3>=1.40.59",
     "psycopg[binary]>=3.2.12",
     "alembic>=1.17.0",
+    "croniter>=6.0.0",
 ]
 
 [dependency-groups]
