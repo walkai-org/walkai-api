@@ -55,14 +55,6 @@ def upgrade() -> None:
             existing_nullable=False,
         )
 
-    # Optional: drop the DB-level default if you only want app-side default
-    op.alter_column(
-        "jobs",
-        "priority_class",
-        server_default=None,
-        schema=None,
-    )
-
 
 def downgrade() -> None:
     bind = op.get_bind()
