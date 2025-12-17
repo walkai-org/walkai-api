@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, SecretStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
 
 
 class InviteIn(BaseModel):
@@ -14,10 +14,15 @@ class UserOut(BaseModel):
     id: int
     email: EmailStr
     role: str
+    high_priority_quota_minutes: int
 
     model_config = ConfigDict(
         from_attributes=True,
     )
+
+
+class UserQuotaUpdate(BaseModel):
+    high_priority_quota_minutes: int = Field(ge=0)
 
 
 class LoginIn(BaseModel):

@@ -191,7 +191,13 @@ def process_due_schedules(
             try:
                 run_session = run_session_factory()
                 job_service.rerun_job(
-                    core, batch, ecr_client, run_session, schedule.job_id
+                    core,
+                    batch,
+                    ecr_client,
+                    run_session,
+                    schedule.job_id,
+                    run_user=None,
+                    is_scheduled=True,
                 )
             except HTTPException as exc:
                 logger.warning(

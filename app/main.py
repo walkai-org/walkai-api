@@ -35,6 +35,7 @@ from app.schemas.users import (
     LoginIn,
     UserCreate,
     UserOut,
+    UserQuotaUpdate,
 )
 from app.services.dynamodb_service import load_oauth_tx, save_oauth_tx
 from app.services.email_service import send_invitation_via_acs_smtp
@@ -212,6 +213,23 @@ def get_registry_credentials(
         )
 
     return {"token": token, "ecr_url": settings.ecr_url}
+
+
+@app.patch("/admin/users/{user_id}/quota", response_model=UserOut)
+def update_user_quota(
+    user_id: int,
+    payload: UserQuotaUpdate,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.high_priority_quota_minutes = payload.high_priority_quota_minutes
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 @app.post("/invitations/verify", response_model=InvitationVerifyOut)

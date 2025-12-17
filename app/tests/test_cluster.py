@@ -315,7 +315,7 @@ def test_save_cluster_insights_updates_job_runs(db_session, test_user):
     db_session.commit()
 
     first_pod_start = datetime.now(UTC)
-    second_pod_finish = datetime.now(UTC)
+    second_pod_finish = second_run_start + timedelta(minutes=5)
     payload = ClusterInsightsIn(
         ts=datetime.now(UTC),
         gpus=[],
@@ -351,3 +351,4 @@ def test_save_cluster_insights_updates_job_runs(db_session, test_user):
     assert second_run.status == RunStatus.succeeded
     assert second_run.started_at == _as_naive_utc(second_run_start)
     assert second_run.finished_at == _as_naive_utc(second_pod_finish)
+    assert second_run.billable_minutes == 5
