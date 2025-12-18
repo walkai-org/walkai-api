@@ -74,6 +74,7 @@ def upgrade() -> None:
         column("user_id", sa.Integer),
         column("started_at", sa.DateTime(timezone=True)),
         column("finished_at", sa.DateTime(timezone=True)),
+        column("billable_minutes", sa.Integer),
     )
 
     jobs_table = sa.table(
