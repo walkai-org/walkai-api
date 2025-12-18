@@ -18,6 +18,17 @@ class User(Base):
     email: Mapped[str] = mapped_column(unique=True)
     password_hash: Mapped[str | None] = mapped_column(default=None, repr=False)
     role: Mapped[str] = mapped_column(default="admin")
+    high_priority_quota_minutes: Mapped[int] = mapped_column(
+        default=180, server_default="180"
+    )
+    high_priority_minutes_used: Mapped[int] = mapped_column(
+        default=0, server_default="0"
+    )
+    quota_resets_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        default_factory=lambda: datetime.datetime.now(datetime.UTC)
+        + datetime.timedelta(days=7),
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         insert_default=func.now(),

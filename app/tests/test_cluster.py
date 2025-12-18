@@ -9,7 +9,7 @@ from app.core.k8s import get_core
 from app.main import app
 from app.models.jobs import Job, JobRun, RunStatus, Volume
 from app.schemas.cluster import ClusterInsightsIn, GPUResources, Pod, PodStatus
-from app.schemas.jobs import GPUProfile
+from app.schemas.jobs import GPUProfile, JobPriority
 from app.services import cluster_service
 
 
@@ -315,7 +315,7 @@ def test_save_cluster_insights_updates_job_runs(db_session, test_user):
     db_session.commit()
 
     first_pod_start = datetime.now(UTC)
-    second_pod_finish = datetime.now(UTC)
+    second_pod_finish = second_run_start + timedelta(minutes=5)
     payload = ClusterInsightsIn(
         ts=datetime.now(UTC),
         gpus=[],
@@ -351,3 +351,53 @@ def test_save_cluster_insights_updates_job_runs(db_session, test_user):
     assert second_run.status == RunStatus.succeeded
     assert second_run.started_at == _as_naive_utc(second_run_start)
     assert second_run.finished_at == _as_naive_utc(second_pod_finish)
+    assert second_run.billable_minutes == 5
+
+
+def test_cluster_updates_usage_for_high_priority(db_session, test_user):
+    job = Job(
+        image="repo/image:tag",
+        gpu_profile=GPUProfile.g1_10,
+        created_by_id=test_user.id,
+        priority=JobPriority.high,
+    )
+    out_volume = Volume(pvc_name="pvc-3", size=10, is_input=False)
+    db_session.add_all([job, out_volume])
+    db_session.flush()
+
+    started_at = datetime.now(UTC) - timedelta(minutes=3)
+    job_run = JobRun(
+        job_id=job.id,
+        status=RunStatus.active,
+        run_token="token-usage",
+        k8s_job_name="job-usage",
+        k8s_pod_name="pod-usage",
+        output_volume_id=out_volume.id,
+        started_at=started_at,
+        user_id=test_user.id,
+    )
+    db_session.add(job_run)
+    db_session.commit()
+
+    finish_time = started_at + timedelta(minutes=4)
+    payload = ClusterInsightsIn(
+        ts=datetime.now(UTC),
+        gpus=[],
+        pods=[
+            Pod(
+                name="pod-usage",
+                namespace="walkai",
+                status=PodStatus.completed,
+                gpu=GPUProfile.g1_10,
+                start_time=started_at,
+                finish_time=finish_time,
+            )
+        ],
+    )
+
+    cluster_service.save_cluster_insights(FakeDynamoTable(), payload, db_session)
+
+    db_session.refresh(job_run)
+    db_session.refresh(test_user)
+    assert job_run.billable_minutes == 4
+    assert test_user.high_priority_minutes_used == 4

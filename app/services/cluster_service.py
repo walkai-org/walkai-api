@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.models.jobs import JobRun
 from app.schemas.cluster import ClusterInsightsIn, Pod, PodStatus
-from app.schemas.jobs import RunStatus
+from app.schemas.jobs import JobPriority, RunStatus
+from app.services.quota_service import compute_billable_minutes, ensure_reset
 
 INSIGHTS_PK: Final = "cache#cluster:insights"
 
@@ -91,6 +92,25 @@ def _sync_job_runs(db: Session, pods: Sequence[Pod]) -> None:
         if job_run.finished_at != pod.finish_time:
             job_run.finished_at = pod.finish_time
             updated = True
+
+        if job_run.started_at and job_run.finished_at:
+            computed_minutes = compute_billable_minutes(
+                job_run.started_at, job_run.finished_at
+            )
+            if job_run.billable_minutes != computed_minutes:
+                delta = computed_minutes - job_run.billable_minutes
+                job_run.billable_minutes = computed_minutes
+                if (
+                    delta > 0
+                    and not job_run.is_scheduled
+                    and job_run.user is not None
+                    and job_run.job is not None
+                    and job_run.job.priority
+                    in {JobPriority.high, JobPriority.extra_high}
+                ):
+                    ensure_reset(job_run.user)
+                    job_run.user.high_priority_minutes_used += delta
+                updated = True
 
     if updated:
         db.commit()

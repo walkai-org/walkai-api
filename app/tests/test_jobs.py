@@ -73,7 +73,7 @@ def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
 
 
 def test_rerun_job_endpoint_calls_service(auth_client, db_session, monkeypatch):
-    client, _ = auth_client
+    client, user = auth_client
     fake_core = object()
     fake_batch = object()
     fake_ecr = object()
@@ -84,30 +84,124 @@ def test_rerun_job_endpoint_calls_service(auth_client, db_session, monkeypatch):
 
     captured: dict[str, object] = {}
 
-    def fake_rerun(core, batch, ecr_client, db, job_id: int):
+    def fake_rerun(
+        core, batch, ecr_client, db, job_id: int, run_user=None, is_scheduled=False
+    ):  # noqa: ARG001
         captured["core"] = core
         captured["batch"] = batch
         captured["ecr_client"] = ecr_client
         captured["db"] = db
         captured["job_id"] = job_id
+        captured["run_user"] = run_user
+        captured["is_scheduled"] = is_scheduled
         return SimpleNamespace(job_id=job_id, k8s_pod_name="pod-rerun")
 
     monkeypatch.setattr(job_service, "rerun_job", fake_rerun)
 
+    payload = JobCreate(image="repo/image:tag", gpu=GPUProfile.g1_10, storage=2)
+    job = job_service.create_job(db_session, payload, user.id)
+    db_session.commit()
+
     try:
-        response = client.post("/jobs/123/runs")
+        response = client.post(f"/jobs/{job.id}/runs")
     finally:
         app.dependency_overrides.pop(get_core, None)
         app.dependency_overrides.pop(get_batch, None)
         app.dependency_overrides.pop(get_ecr_client, None)
 
     assert response.status_code == 200
-    assert response.json() == {"job_id": 123, "pod": "pod-rerun"}
+    assert response.json() == {"job_id": job.id, "pod": "pod-rerun"}
     assert captured["core"] is fake_core
     assert captured["batch"] is fake_batch
     assert captured["ecr_client"] is fake_ecr
     assert captured["db"] is db_session
-    assert captured["job_id"] == 123
+    assert captured["job_id"] == job.id
+    assert captured["is_scheduled"] is False
+    assert captured["run_user"] == user
+
+
+def test_submit_job_blocks_when_quota_exhausted(auth_client, db_session, monkeypatch):
+    client, user = auth_client
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        storage=2,
+        priority=JobPriority.high,
+    )
+    job_service.create_job(db_session, payload, user.id)
+    job_service.create_volume(db_session, storage=payload.storage, is_input=False)
+    user.high_priority_minutes_used = user.high_priority_quota_minutes + 10
+    user.quota_resets_at = datetime.now(UTC) + timedelta(days=1)
+    db_session.flush()
+    db_session.commit()
+
+    app.dependency_overrides[get_core] = lambda: object()
+    app.dependency_overrides[get_batch] = lambda: object()
+    app.dependency_overrides[get_ecr_client] = lambda: object()
+
+    calls = {"count": 0}
+
+    def fake_create(*args, **kwargs):  # noqa: ARG001
+        calls["count"] += 1
+        return SimpleNamespace(job_id=999, k8s_pod_name="pod-should-not-run")
+
+    monkeypatch.setattr(job_service, "create_and_run_job", fake_create)
+
+    try:
+        response = client.post(
+            "/jobs/",
+            json={
+                "image": "repo/image:tag",
+                "gpu": GPUProfile.g1_10.value,
+                "storage": 2,
+                "priority": JobPriority.high.value,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_core, None)
+        app.dependency_overrides.pop(get_batch, None)
+        app.dependency_overrides.pop(get_ecr_client, None)
+
+    assert response.status_code == 403
+    assert calls["count"] == 0
+
+
+def test_rerun_job_blocks_when_quota_exhausted(auth_client, db_session, monkeypatch):
+    client, user = auth_client
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        storage=2,
+        priority=JobPriority.extra_high,
+    )
+    job = job_service.create_job(db_session, payload, user.id)
+    job_service.create_volume(db_session, storage=payload.storage, is_input=False)
+    user.high_priority_minutes_used = user.high_priority_quota_minutes + 1
+    user.quota_resets_at = datetime.now(UTC) + timedelta(days=1)
+    db_session.flush()
+    db_session.commit()
+
+    app.dependency_overrides[get_core] = lambda: object()
+    app.dependency_overrides[get_batch] = lambda: object()
+    app.dependency_overrides[get_ecr_client] = lambda: object()
+
+    rerun_called = {"value": False}
+
+    def fake_rerun(*args, **kwargs):  # noqa: ARG001
+        rerun_called["value"] = True
+        return SimpleNamespace(job_id=job.id, k8s_pod_name="pod-rerun")
+
+    monkeypatch.setattr(job_service, "rerun_job", fake_rerun)
+
+    try:
+        response = client.post(f"/jobs/{job.id}/runs")
+    finally:
+        app.dependency_overrides.pop(get_core, None)
+        app.dependency_overrides.pop(get_batch, None)
+        app.dependency_overrides.pop(get_ecr_client, None)
+
+    assert response.status_code == 403
+    assert rerun_called["value"] is False
 
 
 def test_list_jobs_returns_jobs(auth_client, db_session):
@@ -142,6 +236,28 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
         "started_at": run.started_at,
         "finished_at": run.finished_at,
     }
+
+
+def test_quota_usage_ignores_scheduled_runs(db_session, test_user):
+    payload = JobCreate(
+        image="repo/image:tag",
+        gpu=GPUProfile.g1_10,
+        storage=2,
+        priority=JobPriority.high,
+    )
+    job = job_service.create_job(db_session, payload, test_user.id)
+    output_volume = job_service.create_volume(
+        db_session, storage=payload.storage, is_input=False
+    )
+    scheduled_run = job_service.create_job_run(
+        db_session, job, output_volume, is_scheduled=True
+    )
+    scheduled_run.user_id = test_user.id
+    scheduled_run.billable_minutes = 50
+    scheduled_run.status = RunStatus.succeeded
+    db_session.commit()
+
+    assert test_user.high_priority_minutes_used == 0
 
 
 def test_list_job_images_returns_available_registry_images(auth_client, monkeypatch):

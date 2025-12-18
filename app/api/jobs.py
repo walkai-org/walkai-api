@@ -27,7 +27,7 @@ from app.schemas.jobs import (
     JobRunOut,
 )
 from app.schemas.schedules import ScheduleCreate, ScheduleOut
-from app.services import job_service, schedule_service
+from app.services import job_service, quota_service, schedule_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -41,6 +41,8 @@ def submit_job(
     ecr_client: BaseClient = Depends(get_ecr_client),
     user: User = Depends(get_current_user),
 ):
+    quota_service.enforce_quota(db, user, payload.priority)
+
     job_run = job_service.create_and_run_job(core, batch, ecr_client, db, payload, user)
     return JobRunOut(job_id=job_run.job_id, pod=job_run.k8s_pod_name)
 
@@ -52,9 +54,14 @@ def rerun_job(
     core: client.CoreV1Api = Depends(get_core),
     batch: client.BatchV1Api = Depends(get_batch),
     ecr_client: BaseClient = Depends(get_ecr_client),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ):
-    job_run = job_service.rerun_job(core, batch, ecr_client, db, job_id)
+    job = job_service.get_job(db, job_id)
+    quota_service.enforce_quota(db, user, job.priority)
+
+    job_run = job_service.rerun_job(
+        core, batch, ecr_client, db, job_id, run_user=user, is_scheduled=False
+    )
     return JobRunOut(job_id=job_run.job_id, pod=job_run.k8s_pod_name)
 
 

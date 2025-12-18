@@ -588,13 +588,24 @@ def create_job_run(
     out_volume: Volume,
     input_pvc: Volume | None = None,
     secret_names: Sequence[str] | None = None,
+    run_user: User | None = None,
+    is_scheduled: bool = False,
 ):
     run_token = uuid4().hex
     job_name = str(uuid4())
     normalized_secrets = list(secret_names) if secret_names else []
 
+    user_id: int | None
+    if is_scheduled:
+        user_id = None
+    elif run_user is not None:
+        user_id = run_user.id
+    else:
+        user_id = job.created_by_id
+
     job_run = JobRun(
         job_id=job.id,
+        user_id=user_id,
         status=RunStatus.pending,
         k8s_pod_name=None,
         started_at=None,
@@ -604,6 +615,7 @@ def create_job_run(
         run_token=run_token,
         k8s_job_name=job_name,
         secret_names=normalized_secrets,
+        is_scheduled=is_scheduled,
     )
     db.add(job_run)
     db.flush()
@@ -658,6 +670,7 @@ def create_and_run_job(
         output_pvc,
         input_pvc=input_vol,
         secret_names=payload.secret_names,
+        run_user=user,
     )
 
     registry_secret_name = f"{job_run.k8s_job_name}-registry"
@@ -725,6 +738,8 @@ def rerun_job(
     ecr_client: BaseClient,
     db: Session,
     job_id: int,
+    run_user: User | None = None,
+    is_scheduled: bool = False,
 ):
     stmt = (
         select(Job)
@@ -766,6 +781,8 @@ def rerun_job(
         output_pvc,
         input_pvc=input_vol,
         secret_names=secret_names,
+        run_user=run_user,
+        is_scheduled=is_scheduled,
     )
 
     registry_secret_name = f"{job_run.k8s_job_name}-registry"

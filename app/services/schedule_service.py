@@ -12,7 +12,7 @@ from app.core.database import SessionLocal
 from app.models.jobs import Job, JobRun, JobSchedule
 from app.schemas.jobs import RunStatus
 from app.schemas.schedules import ScheduleCreate, ScheduleKind
-from app.services import job_service
+from app.services import job_service, quota_service
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +160,7 @@ def process_due_schedules(
 
     Returns the number of runs started.
     """
+    quota_service.reset_expired(db, now=now)
 
     run_session_factory = run_session_factory or SessionLocal
     stmt = _due_schedule_query(now)
@@ -191,7 +192,13 @@ def process_due_schedules(
             try:
                 run_session = run_session_factory()
                 job_service.rerun_job(
-                    core, batch, ecr_client, run_session, schedule.job_id
+                    core,
+                    batch,
+                    ecr_client,
+                    run_session,
+                    schedule.job_id,
+                    run_user=None,
+                    is_scheduled=True,
                 )
             except HTTPException as exc:
                 logger.warning(

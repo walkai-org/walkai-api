@@ -73,8 +73,10 @@ def test_scheduler_tick_triggers_due_runs(db_session, test_user, monkeypatch):
 
     calls: list[int] = []
 
-    def fake_rerun(core, batch, ecr_client, db, job_id: int):
-        calls.append(job_id)
+    def fake_rerun(
+        core, batch, ecr_client, db, job_id: int, run_user=None, is_scheduled=False
+    ):  # noqa: ARG001
+        calls.append((job_id, run_user, is_scheduled))
         return SimpleNamespace(job_id=job_id, k8s_pod_name="pod-scheduled")
 
     monkeypatch.setattr(job_service, "rerun_job", fake_rerun)
@@ -89,7 +91,7 @@ def test_scheduler_tick_triggers_due_runs(db_session, test_user, monkeypatch):
     )
 
     assert triggered == 1
-    assert calls == [job.id]
+    assert calls == [(job.id, None, True)]
     db_session.refresh(schedule)
     assert schedule.last_run_at is not None
     assert schedule.next_run_at is None

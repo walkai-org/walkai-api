@@ -5,11 +5,13 @@ from enum import StrEnum
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
     Index,
+    Integer,
     String,
     UniqueConstraint,
     func,
@@ -179,16 +181,25 @@ class JobRun(Base):
         foreign_keys=[output_volume_id], init=False
     )
 
-    k8s_pod_name: Mapped[str | None] = mapped_column(default=None)
-    started_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
-    finished_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
-    secret_names: Mapped[list[str]] = mapped_column(JSON, default_factory=list)
-
     input_volume_id: Mapped[int | None] = mapped_column(
         ForeignKey("volumes.id"), default=None
     )
     input_volume: Mapped[Volume | None] = relationship(
         foreign_keys=[input_volume_id], init=False
+    )
+
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    user: Mapped[User | None] = relationship(init=False)
+
+    k8s_pod_name: Mapped[str | None] = mapped_column(default=None)
+    started_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
+    secret_names: Mapped[list[str]] = mapped_column(JSON, default_factory=list)
+    billable_minutes: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    is_scheduled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
     )
 
     __table_args__ = (
