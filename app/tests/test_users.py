@@ -10,6 +10,8 @@ def test_admin_can_update_user_quota(auth_client, db_session):
     data = response.json()
     assert data["id"] == user.id
     assert data["high_priority_quota_minutes"] == 60
+    assert data["high_priority_minutes_used"] == user.high_priority_minutes_used
+    assert data["quota_resets_at"]
 
     db_session.refresh(user)
     assert user.high_priority_quota_minutes == 60

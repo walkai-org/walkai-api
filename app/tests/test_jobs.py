@@ -17,7 +17,7 @@ from app.core.k8s import get_batch, get_core
 from app.main import app
 from app.models.jobs import JobRun, RunStatus
 from app.schemas.jobs import GPUProfile, JobCreate, JobPriority
-from app.services import job_service, quota_service
+from app.services import job_service
 
 
 def test_submit_job_returns_job_run(auth_client, db_session, monkeypatch):
@@ -128,16 +128,11 @@ def test_submit_job_blocks_when_quota_exhausted(auth_client, db_session, monkeyp
         storage=2,
         priority=JobPriority.high,
     )
-    job = job_service.create_job(db_session, payload, user.id)
-    output_volume = job_service.create_volume(
-        db_session, storage=payload.storage, is_input=False
-    )
-    run = job_service.create_job_run(
-        db_session, job, output_volume, run_user=user, is_scheduled=False
-    )
-    run.k8s_pod_name = "pod-used"
-    run.status = RunStatus.succeeded
-    run.billable_minutes = user.high_priority_quota_minutes + 10
+    job_service.create_job(db_session, payload, user.id)
+    job_service.create_volume(db_session, storage=payload.storage, is_input=False)
+    user.high_priority_minutes_used = user.high_priority_quota_minutes + 10
+    user.quota_resets_at = datetime.now(UTC) + timedelta(days=1)
+    db_session.flush()
     db_session.commit()
 
     app.dependency_overrides[get_core] = lambda: object()
@@ -180,15 +175,10 @@ def test_rerun_job_blocks_when_quota_exhausted(auth_client, db_session, monkeypa
         priority=JobPriority.extra_high,
     )
     job = job_service.create_job(db_session, payload, user.id)
-    output_volume = job_service.create_volume(
-        db_session, storage=payload.storage, is_input=False
-    )
-    initial_run = job_service.create_job_run(
-        db_session, job, output_volume, run_user=user, is_scheduled=False
-    )
-    initial_run.k8s_pod_name = "pod-initial"
-    initial_run.status = RunStatus.succeeded
-    initial_run.billable_minutes = user.high_priority_quota_minutes + 1
+    job_service.create_volume(db_session, storage=payload.storage, is_input=False)
+    user.high_priority_minutes_used = user.high_priority_quota_minutes + 1
+    user.quota_resets_at = datetime.now(UTC) + timedelta(days=1)
+    db_session.flush()
     db_session.commit()
 
     app.dependency_overrides[get_core] = lambda: object()
@@ -267,8 +257,7 @@ def test_quota_usage_ignores_scheduled_runs(db_session, test_user):
     scheduled_run.status = RunStatus.succeeded
     db_session.commit()
 
-    used = quota_service.get_used_high_priority_minutes(db_session, test_user.id)
-    assert used == 0
+    assert test_user.high_priority_minutes_used == 0
 
 
 def test_list_job_images_returns_available_registry_images(auth_client, monkeypatch):

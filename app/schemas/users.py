@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
 
 
@@ -15,6 +17,9 @@ class UserOut(BaseModel):
     email: EmailStr
     role: str
     high_priority_quota_minutes: int
+    high_priority_minutes_used: int
+    quota_resets_at: datetime | None
+    high_priority_minutes_remaining: int | None = Field(default=None)
 
     model_config = ConfigDict(
         from_attributes=True,

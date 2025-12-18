@@ -408,7 +408,14 @@ def github_callback(
 
 @app.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
-    return UserOut.model_validate(user)
+    remaining: int | None = None
+    if user.high_priority_quota_minutes is not None:
+        remaining = max(
+            0, user.high_priority_quota_minutes - (user.high_priority_minutes_used or 0)
+        )
+    payload = UserOut.model_validate(user)
+    payload.high_priority_minutes_remaining = remaining
+    return payload
 
 
 @app.post("/logout")
