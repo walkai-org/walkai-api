@@ -401,3 +401,83 @@ def test_cluster_updates_usage_for_high_priority(db_session, test_user):
     db_session.refresh(test_user)
     assert job_run.billable_minutes == 4
     assert test_user.high_priority_minutes_used == 4
+
+
+def test_cluster_updates_pod_and_attempts_on_recreation(db_session, test_user):
+    fake_ddb = FakeDynamoTable()
+
+    job = Job(
+        image="repo/image:tag",
+        gpu_profile=GPUProfile.g1_10,
+        created_by_id=test_user.id,
+    )
+    volume = Volume(pvc_name="pvc-recreate", size=10, is_input=False)
+    db_session.add_all([job, volume])
+    db_session.flush()
+
+    job_run = JobRun(
+        job_id=job.id,
+        status=RunStatus.pending,
+        run_token="token-recreate",
+        k8s_job_name="job-recreate",
+        k8s_pod_name="job-recreate-aaaaa",
+        output_volume_id=volume.id,
+    )
+    db_session.add(job_run)
+    db_session.commit()
+
+    first_start = datetime.now(UTC) - timedelta(minutes=10)
+    first_payload = ClusterInsightsIn(
+        ts=datetime.now(UTC),
+        gpus=[],
+        pods=[
+            Pod(
+                name="job-recreate-aaaaa",
+                namespace="walkai",
+                status=PodStatus.running,
+                gpu=GPUProfile.g1_10,
+                start_time=first_start,
+                finish_time=None,
+            )
+        ],
+    )
+
+    cluster_service.save_cluster_insights(fake_ddb, first_payload, db_session)
+    db_session.refresh(job_run)
+
+    assert job_run.attempts == 1
+    assert job_run.k8s_pod_name == "job-recreate-aaaaa"
+    assert job_run.started_at == _as_naive_utc(first_start)
+    assert job_run.first_started_at == _as_naive_utc(first_start)
+
+    new_start = datetime.now(UTC)
+    second_payload = ClusterInsightsIn(
+        ts=datetime.now(UTC),
+        gpus=[],
+        pods=[
+            Pod(
+                name="job-recreate-aaaaa",
+                namespace="walkai",
+                status=PodStatus.failed,
+                gpu=GPUProfile.g1_10,
+                start_time=first_start,
+                finish_time=new_start - timedelta(minutes=5),
+            ),
+            Pod(
+                name="job-recreate-bbbbb",
+                namespace="walkai",
+                status=PodStatus.running,
+                gpu=GPUProfile.g1_10,
+                start_time=new_start,
+                finish_time=None,
+            ),
+        ],
+    )
+
+    cluster_service.save_cluster_insights(fake_ddb, second_payload, db_session)
+    db_session.refresh(job_run)
+
+    assert job_run.k8s_pod_name == "job-recreate-bbbbb"
+    assert job_run.attempts == 2
+    assert job_run.started_at == _as_naive_utc(new_start)
+    assert job_run.first_started_at == _as_naive_utc(first_start)
