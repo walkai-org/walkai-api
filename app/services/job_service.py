@@ -284,6 +284,14 @@ def _render_job_manifest(
             "backoffLimit": 0,
             "ttlSecondsAfterFinished": 12,
             "template": template,
+            "podFailurePolicy": {
+                "rules": [
+                    {
+                        "action": "Ignore",
+                        "onPodConditions": [{"type": "DisruptionTarget"}],
+                    }
+                ]
+            },
         },
     }
 
