@@ -624,6 +624,8 @@ def create_job_run(
         k8s_job_name=job_name,
         secret_names=normalized_secrets,
         is_scheduled=is_scheduled,
+        attempts=1,
+        first_started_at=None,
     )
     db.add(job_run)
     db.flush()

@@ -192,6 +192,8 @@ class JobRun(Base):
     user: Mapped[User | None] = relationship(init=False)
 
     k8s_pod_name: Mapped[str | None] = mapped_column(default=None)
+    attempts: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    first_started_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
     started_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
     finished_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
     secret_names: Mapped[list[str]] = mapped_column(JSON, default_factory=list)

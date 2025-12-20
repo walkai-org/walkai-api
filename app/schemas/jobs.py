@@ -105,6 +105,8 @@ class JobRunDetail(JobRunSummary):
     secret_names: list[str]
     output_volume: VolumeOut
     input_volume: VolumeOut | None
+    attempts: int
+    first_started_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
 
