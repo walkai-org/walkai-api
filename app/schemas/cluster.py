@@ -39,3 +39,8 @@ class ClusterInsightsIn(BaseModel):
     pods: list[Pod]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ClusterConfigUpdateIn(BaseModel):
+    cluster_url: str
+    cluster_token: str

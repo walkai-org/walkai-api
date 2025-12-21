@@ -1,17 +1,22 @@
 from logging import getLogger
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 from kubernetes import client
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
-from app.core.aws import get_ddb_cluster_cache_table
+from app.core.aws import get_ddb_cluster_cache_table, put_k8s_cluster_creds_to_secret
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.k8s import get_core
+from app.core.k8s import get_core, swap_kubernetes_clients
 from app.models.users import User
-from app.schemas.cluster import ClusterInsightsIn, GPUResources, Pod
+from app.schemas.cluster import (
+    ClusterConfigUpdateIn,
+    ClusterInsightsIn,
+    GPUResources,
+    Pod,
+)
 from app.services import cluster_service
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
@@ -84,3 +89,26 @@ def stream_pod_logs(
         timestamps=timestamps,
     )
     return StreamingResponse(log_iter, media_type="text/plain")
+
+
+@router.put("/cluster-config")
+async def update_cluster_config(
+    payload: ClusterConfigUpdateIn,
+    request: Request,
+    _: str = Depends(require_admin),
+):
+    sm_client = request.app.state.secrets_manager_client
+
+    put_k8s_cluster_creds_to_secret(
+        sm_client,
+        cluster_url=payload.cluster_url,
+        cluster_token=payload.cluster_token,
+    )
+
+    await swap_kubernetes_clients(
+        request.app,
+        cluster_url=payload.cluster_url,
+        cluster_token=payload.cluster_token,
+    )
+
+    return {"ok": True}
