@@ -1,4 +1,5 @@
-from typing import Literal
+import json
+from typing import Literal, TypedDict
 
 import boto3
 from boto3.session import Session
@@ -9,6 +10,11 @@ from fastapi import Request
 from app.core.config import get_settings
 
 settings = get_settings()
+
+
+class K8sSecret(TypedDict):
+    cluster_url: str
+    cluster_token: str
 
 
 def _build_session() -> Session:
@@ -29,6 +35,11 @@ def build_ecr_client() -> BaseClient:
     return session.client("ecr")
 
 
+def build_secrets_manager_client() -> BaseClient:
+    session = _build_session()
+    return session.client("secretsmanager")
+
+
 def get_s3_client(request: Request) -> BaseClient:
     s3_client = getattr(request.app.state, "s3_client", None)
     if s3_client is None:
@@ -41,6 +52,43 @@ def get_ecr_client(request: Request) -> BaseClient:
     if ecr_client is None:
         raise RuntimeError("ECR client is not configured on application state")
     return ecr_client
+
+
+def get_secrets_manager_client(request: Request) -> BaseClient:
+    sm = getattr(request.app.state, "secrets_manager_client", None)
+    if sm is None:
+        raise RuntimeError(
+            "Secrets Manager client is not configured on application state"
+        )
+    return sm
+
+
+def get_k8s_cluster_creds_from_secret(sm_client: BaseClient) -> K8sSecret:
+    resp = sm_client.get_secret_value(SecretId=settings.k8s_secret_id)
+    raw = resp.get("SecretString") or ""
+    data = json.loads(raw)
+
+    if "cluster_url" not in data or "cluster_token" not in data:
+        raise RuntimeError("K8S secret must contain 'cluster_url' and 'cluster_token'")
+
+    return {
+        "cluster_url": data["cluster_url"],
+        "cluster_token": data["cluster_token"],
+    }
+
+
+def put_k8s_cluster_creds_to_secret(
+    sm_client: BaseClient,
+    *,
+    cluster_url: str,
+    cluster_token: str,
+) -> None:
+    sm_client.put_secret_value(
+        SecretId=settings.k8s_secret_id,
+        SecretString=json.dumps(
+            {"cluster_url": cluster_url, "cluster_token": cluster_token}
+        ),
+    )
 
 
 def presign_url(

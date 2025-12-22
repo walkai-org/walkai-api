@@ -33,8 +33,7 @@ class Settings(BaseSettings):
     acs_smtp_password: str | None = Field(default=None, alias="ACS_SMTP_PASSWORD")
     mail_from: str | None = Field(default=None, alias="MAIL_FROM")
 
-    cluster_token: str = Field(alias="CLUSTER_TOKEN")
-    cluster_url: str = Field(alias="CLUSTER_URL")
+    k8s_secret_id: str = Field(alias="K8S_SECRET_ID")
     namespace: str = Field(default="walkai", alias="JOB_NAMESPACE")
     api_base_url: str = Field(alias="API_BASE_URL")
 
@@ -67,13 +66,26 @@ async def lifespan(app: FastAPI):
     from app.core.aws import (
         build_ecr_client,
         build_s3_client,
+        build_secrets_manager_client,
         create_ddb_cluster_cache_table,
         create_ddb_oauth_table,
+        get_k8s_cluster_creds_from_secret,
     )
     from app.core.k8s import build_kubernetes_api_client
     from app.workers.scheduler import scheduler_loop
 
-    api_client = build_kubernetes_api_client()
+    sm_client = build_secrets_manager_client()
+    app.state.secrets_manager_client = sm_client
+
+    app.state.k8s_lock = asyncio.Lock()
+
+    creds = get_k8s_cluster_creds_from_secret(sm_client)
+
+    api_client = build_kubernetes_api_client(
+        cluster_url=creds["cluster_url"],
+        cluster_token=creds["cluster_token"],
+    )
+    app.state.k8s_api_client = api_client
     app.state.core = client.CoreV1Api(api_client)
     app.state.batch = client.BatchV1Api(api_client)
 
@@ -101,10 +113,15 @@ async def lifespan(app: FastAPI):
             scheduler_task.cancel()
             with suppress(asyncio.CancelledError):
                 await scheduler_task
-        api_client.close()
+        api_client = getattr(app.state, "k8s_api_client", None)
+        if api_client is not None:
+            api_client.close()
         close_s3 = getattr(s3_client, "close", None)
         if callable(close_s3):
             close_s3()
         close_ecr = getattr(ecr_client, "close", None)
         if callable(close_ecr):
             close_ecr()
+        close_sm = getattr(sm_client, "close", None)
+        if callable(close_sm):
+            close_sm()
