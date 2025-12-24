@@ -77,6 +77,13 @@ def get_k8s_cluster_creds_from_secret(sm_client: BaseClient) -> K8sSecret:
     }
 
 
+def get_k8s_cluster_creds_from_settings(settings) -> K8sSecret:
+    return {
+        "cluster_url": settings.cluster_url,
+        "cluster_token": settings.cluster_token,
+    }
+
+
 def put_k8s_cluster_creds_to_secret(
     sm_client: BaseClient,
     *,
