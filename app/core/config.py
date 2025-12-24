@@ -15,7 +15,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_env: str = Field(default="development", alias="APP_ENV")
+    app_env: str = Field(default="prod", alias="APP_ENV")
 
     jwt_secret: str = Field(alias="JWT_SECRET")
     jwt_algo: str = Field(alias="JWT_ALGO")
@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     ddb_table_cluster_cache: str = Field(alias="DYNAMODB_CLUSTER_CACHE_TABLE")
     ddb_endpoint: str | None = Field(default=None, alias="DYNAMODB_ENDPOINT")
 
+    cluster_url: str | None = Field(alias="CLUSTER_URL")
+    cluster_token: str | None = Field(alias="CLUSTER_TOKEN")
+
     schedule_worker_enabled: bool = Field(
         default=False, alias="SCHEDULE_WORKER_ENABLED"
     )
@@ -70,6 +73,7 @@ async def lifespan(app: FastAPI):
         create_ddb_cluster_cache_table,
         create_ddb_oauth_table,
         get_k8s_cluster_creds_from_secret,
+        get_k8s_cluster_creds_from_settings,
     )
     from app.core.k8s import build_kubernetes_api_client
     from app.workers.scheduler import scheduler_loop
@@ -79,7 +83,11 @@ async def lifespan(app: FastAPI):
 
     app.state.k8s_lock = asyncio.Lock()
 
-    creds = get_k8s_cluster_creds_from_secret(sm_client)
+    settings = get_settings()
+    if settings.app_env == "prod":
+        creds = get_k8s_cluster_creds_from_secret(sm_client)
+    else:
+        creds = get_k8s_cluster_creds_from_settings(settings)
 
     api_client = build_kubernetes_api_client(
         cluster_url=creds["cluster_url"],
@@ -102,7 +110,6 @@ async def lifespan(app: FastAPI):
     app.state.ddb_cluster_table = ddb_cluster_table
 
     scheduler_task = None
-    settings = get_settings()
     if settings.schedule_worker_enabled:
         scheduler_task = asyncio.create_task(scheduler_loop(app))
 
