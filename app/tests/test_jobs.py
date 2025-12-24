@@ -231,8 +231,6 @@ def test_list_jobs_returns_jobs(auth_client, db_session):
     assert job_item["latest_run"] == {
         "id": run.id,
         "status": run.status.value,
-        "attempts": run.attempts,
-        "first_started_at": run.first_started_at,
         "k8s_job_name": run.k8s_job_name,
         "k8s_pod_name": run.k8s_pod_name,
         "started_at": run.started_at,
@@ -366,8 +364,6 @@ def test_get_job_detail_returns_runs_without_volume_data(auth_client, db_session
     run_data = data["runs"][0]
     assert run_data["id"] == run.id
     assert run_data["status"] == run.status.value
-    assert run_data["attempts"] == run.attempts
-    assert run_data["first_started_at"] == run.first_started_at
     assert run_data["k8s_pod_name"] == run.k8s_pod_name
     assert run.output_volume_id == output_volume.id
     assert run.input_volume_id == input_volume.id
