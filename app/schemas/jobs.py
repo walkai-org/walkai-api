@@ -22,6 +22,7 @@ class RunStatus(StrEnum):
     succeeded = "succeeded"
     failed = "failed"
     cancelled = "cancelled"
+    terminating = "terminating"
 
 
 class JobPriority(StrEnum):

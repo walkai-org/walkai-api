@@ -25,6 +25,7 @@ _POD_STATUS_TO_RUN: Final = {
     PodStatus.succeeded: RunStatus.succeeded,
     PodStatus.error: RunStatus.failed,
     PodStatus.crash: RunStatus.failed,
+    PodStatus.terminating: RunStatus.terminating,
 }
 
 

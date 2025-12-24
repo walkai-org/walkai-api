@@ -22,6 +22,7 @@ class PodStatus(StrEnum):
     succeeded = "Succeeded"
     crash = "CrashLoopBackOff"
     failed = "Failed"
+    terminating = "Terminating"
 
 
 class Pod(BaseModel):
