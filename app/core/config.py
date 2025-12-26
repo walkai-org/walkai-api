@@ -48,8 +48,8 @@ class Settings(BaseSettings):
     ddb_table_cluster_cache: str = Field(alias="DYNAMODB_CLUSTER_CACHE_TABLE")
     ddb_endpoint: str | None = Field(default=None, alias="DYNAMODB_ENDPOINT")
 
-    cluster_url: str | None = Field(alias="CLUSTER_URL")
-    cluster_token: str | None = Field(alias="CLUSTER_TOKEN")
+    cluster_url: str | None = Field(default=None, alias="CLUSTER_URL")
+    cluster_token: str | None = Field(default=None, alias="CLUSTER_TOKEN")
 
     schedule_worker_enabled: bool = Field(
         default=False, alias="SCHEDULE_WORKER_ENABLED"
