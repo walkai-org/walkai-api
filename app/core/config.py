@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     ddb_table_oauth: str = Field(alias="DYNAMODB_OAUTH_TABLE")
     ddb_table_cluster_cache: str = Field(alias="DYNAMODB_CLUSTER_CACHE_TABLE")
     ddb_endpoint: str | None = Field(default=None, alias="DYNAMODB_ENDPOINT")
+    bootstrap_email_secret_id: str = Field(alias="BOOTSTRAP_EMAIL_SECRET_ID")
 
     cluster_url: str | None = Field(default=None, alias="CLUSTER_URL")
     cluster_token: str | None = Field(default=None, alias="CLUSTER_TOKEN")
@@ -66,6 +67,7 @@ def get_settings() -> Settings:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.bootstrap.first_user_invite import run_first_user_bootstrap
     from app.core.aws import (
         build_ecr_client,
         build_s3_client,
@@ -80,6 +82,8 @@ async def lifespan(app: FastAPI):
 
     sm_client = build_secrets_manager_client()
     app.state.secrets_manager_client = sm_client
+
+    run_first_user_bootstrap(sm_client)
 
     app.state.k8s_lock = asyncio.Lock()
 

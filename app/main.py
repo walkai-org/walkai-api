@@ -50,6 +50,7 @@ root.setLevel(logging.INFO)
 
 settings = get_settings()
 INVITE_TTL_HOURS = 48
+BOOTSTRAP_INVITED_BY = "system-bootstrap"
 
 GITHUB_AUTH = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
@@ -258,7 +259,8 @@ def accept_invitation(body: InvitationAcceptIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="Account already exists")
 
     pwd_hash = hash_password(body.password.get_secret_value())
-    user = User(email=email, password_hash=pwd_hash, role="user")
+    role = "admin" if inv.invited_by == BOOTSTRAP_INVITED_BY else "user"
+    user = User(email=email, password_hash=pwd_hash, role=role)
     db.add(user)
 
     inv.used_at = datetime.utcnow()
@@ -354,7 +356,8 @@ def github_callback(
 
         user = db.query(User).filter(User.email == invited_email).first()
         if not user:
-            user = User(email=invited_email, password_hash=None, role="user")
+            role = "admin" if inv.invited_by == BOOTSTRAP_INVITED_BY else "user"
+            user = User(email=invited_email, password_hash=None, role=role)
             db.add(user)
             db.flush()
 
