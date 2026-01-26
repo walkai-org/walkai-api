@@ -76,6 +76,8 @@ app.add_middleware(
         "https://www.walkaiorg.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://walkai.walkaiorg.app/",
+        "https://www.walkai.walkaiorg.app/",
     ],
     allow_credentials=True,
     allow_methods=["*"],
