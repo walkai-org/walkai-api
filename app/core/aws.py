@@ -1,7 +1,6 @@
 import json
 from typing import Literal, TypedDict
 
-import boto3
 from boto3.session import Session
 from botocore.client import BaseClient
 from botocore.config import Config
@@ -18,11 +17,13 @@ class K8sSecret(TypedDict):
 
 
 def _build_session() -> Session:
-    return boto3.Session(
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
-        region_name=settings.aws_region,
-    )
+    if settings.aws_access_key_id and settings.aws_secret_access_key:
+        return Session(
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+            region_name=settings.aws_region,
+        )
+    return Session(region_name=settings.aws_region)
 
 
 def build_s3_client() -> BaseClient:
