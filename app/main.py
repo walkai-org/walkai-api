@@ -33,7 +33,6 @@ from app.schemas.users import (
     InvitationVerifyOut,
     InviteIn,
     LoginIn,
-    UserCreate,
     UserOut,
     UserQuotaUpdate,
 )
@@ -109,23 +108,6 @@ def _pick_verified_primary_email(emails: list[dict]) -> str | None:
         if e.get("primary") and e.get("verified"):
             return e["email"].strip().lower()
     return None
-
-
-@app.post("/users", response_model=UserOut, status_code=201)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == payload.email).first()
-    if existing_user:
-        raise HTTPException(status_code=409, detail="Email already registered")
-
-    user = User(
-        email=payload.email.strip().lower(),
-        password_hash=hash_password(payload.password),
-        role="admin",
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
 
 
 @app.get("/users", response_model=list[UserOut])
