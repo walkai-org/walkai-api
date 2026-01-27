@@ -37,8 +37,10 @@ class Settings(BaseSettings):
     namespace: str = Field(default="walkai", alias="JOB_NAMESPACE")
     api_base_url: str = Field(alias="API_BASE_URL")
 
-    aws_access_key_id: str = Field(alias="AWS_ACCESS_KEY_ID")
-    aws_secret_access_key: str = Field(alias="AWS_SECRET_ACCESS_KEY")
+    aws_access_key_id: str | None = Field(default=None, alias="AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: str | None = Field(
+        default=None, alias="AWS_SECRET_ACCESS_KEY"
+    )
     aws_region: str = Field(alias="AWS_REGION")
     aws_s3_bucket: str = Field(alias="AWS_S3_BUCKET")
 
@@ -47,6 +49,7 @@ class Settings(BaseSettings):
     ddb_table_oauth: str = Field(alias="DYNAMODB_OAUTH_TABLE")
     ddb_table_cluster_cache: str = Field(alias="DYNAMODB_CLUSTER_CACHE_TABLE")
     ddb_endpoint: str | None = Field(default=None, alias="DYNAMODB_ENDPOINT")
+    bootstrap_email_secret_id: str = Field(alias="BOOTSTRAP_EMAIL_SECRET_ID")
 
     cluster_url: str | None = Field(default=None, alias="CLUSTER_URL")
     cluster_token: str | None = Field(default=None, alias="CLUSTER_TOKEN")
@@ -58,6 +61,14 @@ class Settings(BaseSettings):
         default=30, alias="SCHEDULE_INTERVAL_SECONDS", ge=1
     )
 
+    cors_allow_origins: list[str] = Field(
+        default=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        alias="CORS_ALLOW_ORIGINS",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -66,6 +77,7 @@ def get_settings() -> Settings:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.bootstrap.first_user_invite import run_first_user_bootstrap
     from app.core.aws import (
         build_ecr_client,
         build_s3_client,
@@ -80,6 +92,8 @@ async def lifespan(app: FastAPI):
 
     sm_client = build_secrets_manager_client()
     app.state.secrets_manager_client = sm_client
+
+    run_first_user_bootstrap(sm_client)
 
     app.state.k8s_lock = asyncio.Lock()
 

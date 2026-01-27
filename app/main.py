@@ -33,7 +33,6 @@ from app.schemas.users import (
     InvitationVerifyOut,
     InviteIn,
     LoginIn,
-    UserCreate,
     UserOut,
     UserQuotaUpdate,
 )
@@ -50,6 +49,7 @@ root.setLevel(logging.INFO)
 
 settings = get_settings()
 INVITE_TTL_HOURS = 48
+BOOTSTRAP_INVITED_BY = "system-bootstrap"
 
 GITHUB_AUTH = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
@@ -70,12 +70,7 @@ app = FastAPI(title="walk:ai API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://walkaiorg.app",
-        "https://www.walkaiorg.app",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=settings.cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,23 +108,6 @@ def _pick_verified_primary_email(emails: list[dict]) -> str | None:
         if e.get("primary") and e.get("verified"):
             return e["email"].strip().lower()
     return None
-
-
-@app.post("/users", response_model=UserOut, status_code=201)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == payload.email).first()
-    if existing_user:
-        raise HTTPException(status_code=409, detail="Email already registered")
-
-    user = User(
-        email=payload.email.strip().lower(),
-        password_hash=hash_password(payload.password),
-        role="admin",
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
 
 
 @app.get("/users", response_model=list[UserOut])
@@ -258,7 +236,8 @@ def accept_invitation(body: InvitationAcceptIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="Account already exists")
 
     pwd_hash = hash_password(body.password.get_secret_value())
-    user = User(email=email, password_hash=pwd_hash, role="user")
+    role = "admin" if inv.invited_by == BOOTSTRAP_INVITED_BY else "user"
+    user = User(email=email, password_hash=pwd_hash, role=role)
     db.add(user)
 
     inv.used_at = datetime.utcnow()
@@ -354,7 +333,8 @@ def github_callback(
 
         user = db.query(User).filter(User.email == invited_email).first()
         if not user:
-            user = User(email=invited_email, password_hash=None, role="user")
+            role = "admin" if inv.invited_by == BOOTSTRAP_INVITED_BY else "user"
+            user = User(email=invited_email, password_hash=None, role=role)
             db.add(user)
             db.flush()
 

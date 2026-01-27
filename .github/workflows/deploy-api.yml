@@ -60,3 +60,29 @@ jobs:
             --force-new-deployment \
             --desired-count 1 \
             --region "$AWS_REGION"
+
+  build-and-push-ghcr:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      GHCR_IMAGE: ghcr.io/scampanella1/walkai_api:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: scampanella1
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build and push Docker image as latest
+        run: |
+          docker build -t ${{ env.GHCR_IMAGE }} -f Dockerfile .
+          docker push ${{ env.GHCR_IMAGE }}
