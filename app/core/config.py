@@ -61,6 +61,14 @@ class Settings(BaseSettings):
         default=30, alias="SCHEDULE_INTERVAL_SECONDS", ge=1
     )
 
+    cors_allow_origins: list[str] = Field(
+        default=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        alias="CORS_ALLOW_ORIGINS",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
