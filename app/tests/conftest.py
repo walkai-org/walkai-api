@@ -18,6 +18,7 @@ os.environ.setdefault(
 os.environ.setdefault("ECR_ARN", "arn:aws:ecr:us-test-1:123456789012:repository/test")
 os.environ.setdefault("DYNAMODB_OAUTH_TABLE", "walkai-test-oauth")
 os.environ.setdefault("DYNAMODB_CLUSTER_CACHE_TABLE", "walkai-test-cluster-cache")
+os.environ.setdefault("INVITE_BASE_URL", "https://frontend.local/invitations/accept")
 
 import pytest
 from fastapi.testclient import TestClient

@@ -33,3 +33,27 @@ def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
         smtp.ehlo()
         smtp.login(USER, PWD)
         smtp.send_message(msg)
+
+
+def send_password_reset_via_acs_smtp(to_email: str, link: str) -> None:
+    msg = EmailMessage()
+    msg["Subject"] = "Reset your walk:ai password"
+    msg["From"] = MAIL_FROM
+    msg["To"] = to_email
+    msg.set_content(
+        "Hi,\n\nFollow this link to reset your walk:ai password: "
+        f"{link}\n\nIf you did not request this, you can ignore this email.\n"
+    )
+    msg.add_alternative(
+        f"""<p>Hi,</p>
+            <p>Follow this link to reset your <b>walk:ai</b> password:</p>
+            <p><a href=\"{link}\">{link}</a></p>
+            <p>If you did not request this, you can safely ignore this email.</p>""",
+        subtype="html",
+    )
+    with smtplib.SMTP(HOST, PORT, timeout=20) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.ehlo()
+        smtp.login(USER, PWD)
+        smtp.send_message(msg)

@@ -112,7 +112,7 @@ def run_first_user_bootstrap(sm_client) -> bool:
     finally:
         db.close()
 
-    try:
+    try:  # noqa
         send_invitation_via_acs_smtp(email, invitation_link)
     except Exception:
         pass

@@ -45,6 +45,11 @@ class User(Base):
         cascade="all, delete-orphan",
         init=False,
     )
+    password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        init=False,
+    )
 
 
 class Invitation(Base):
@@ -90,3 +95,26 @@ class PersonalAccessToken(Base):
         init=False,
     )
     last_used_at: Mapped[datetime.datetime | None] = mapped_column(default=None)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user: Mapped[User] = relationship(
+        back_populates="password_reset_tokens",
+        init=False,
+    )
+    token_hash: Mapped[str] = mapped_column(unique=True, index=True, repr=False)
+    expires_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        default=None,
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        insert_default=func.now(),
+        server_default=func.now(),
+        init=False,
+    )
