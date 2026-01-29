@@ -33,7 +33,7 @@ async def swap_kubernetes_clients(
         app.state.batch = client.BatchV1Api(new_api_client)
 
         if old_api_client is not None:
-            try:
+            try:  # noqa
                 old_api_client.close()
             except Exception:
                 pass

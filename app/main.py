@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api import cluster, jobs, tokens, volumes
+from app.api import cluster, jobs, password_reset, tokens, volumes
 from app.api import secrets as secrets_api
 from app.api.deps import get_current_user, require_admin
 from app.core.aws import get_ddb_oauth_table, get_ecr_client
@@ -80,6 +80,7 @@ app.include_router(cluster.router)
 app.include_router(jobs.router)
 app.include_router(volumes.router)
 app.include_router(tokens.router)
+app.include_router(password_reset.router)
 app.include_router(secrets_api.router)
 
 
