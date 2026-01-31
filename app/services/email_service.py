@@ -1,5 +1,7 @@
+import mimetypes
 import smtplib
 from email.message import EmailMessage
+from pathlib import Path
 
 from app.core.config import get_settings
 
@@ -10,6 +12,19 @@ PORT = settings.acs_smtp_port
 USER = settings.acs_smtp_username
 PWD = settings.acs_smtp_password
 MAIL_FROM = settings.mail_from
+_LOGO_PATH = Path(__file__).resolve().parents[1] / "assets" / "walkai_logo_final.png"
+_LOGO_CID = "walkai-logo"
+
+
+def _attach_logo(html_part: EmailMessage | None) -> None:
+    if not _LOGO_PATH.exists():
+        return
+    if html_part is None:
+        return
+    data = _LOGO_PATH.read_bytes()
+    mime_type, _ = mimetypes.guess_type(str(_LOGO_PATH))
+    maintype, subtype = (mime_type or "image/png").split("/", 1)
+    html_part.add_related(data, maintype=maintype, subtype=subtype, cid=_LOGO_CID)
 
 
 def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
@@ -23,10 +38,12 @@ def send_invitation_via_acs_smtp(to_email: str, link: str) -> None:
     msg.add_alternative(
         f"""<p>Hi,</p>
             <p>You have been invited to <b>walk:ai</b>.</p>
-            <p>Follow this link to continue: <a href=\"{link}\">{link}</a></p>
-            <p>If you did not expect this email, you can safely ignore it.</p>""",
+            <p>Follow this link to continue: <a href="{link}">{link}</a></p>
+            <p>If you did not expect this email, you can safely ignore it.</p>
+            <p><img src="cid:{_LOGO_CID}" alt="walk:ai" style="max-width:160px;height:auto;" /></p>""",
         subtype="html",
     )
+    _attach_logo(msg.get_body(preferencelist=("html",)))
     with smtplib.SMTP(HOST, PORT, timeout=20) as smtp:
         smtp.ehlo()
         smtp.starttls()
@@ -47,10 +64,12 @@ def send_password_reset_via_acs_smtp(to_email: str, link: str) -> None:
     msg.add_alternative(
         f"""<p>Hi,</p>
             <p>Follow this link to reset your <b>walk:ai</b> password:</p>
-            <p><a href=\"{link}\">{link}</a></p>
-            <p>If you did not request this, you can safely ignore this email.</p>""",
+            <p><a href="{link}">{link}</a></p>
+            <p>If you did not request this, you can safely ignore this email.</p>
+            <p><img src="cid:{_LOGO_CID}" alt="walk:ai" style="max-width:160px;height:auto;" /></p>""",
         subtype="html",
     )
+    _attach_logo(msg.get_body(preferencelist=("html",)))
     with smtplib.SMTP(HOST, PORT, timeout=20) as smtp:
         smtp.ehlo()
         smtp.starttls()
