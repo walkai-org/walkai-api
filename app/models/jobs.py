@@ -212,3 +212,7 @@ class JobRun(Base):
         UniqueConstraint("k8s_job_name", name="uq_job_runs_k8s_job_name"),
         UniqueConstraint("k8s_pod_name", name="uq_job_runs_k8s_pod_name"),
     )
+
+    @property
+    def image(self) -> str:
+        return self.job.image

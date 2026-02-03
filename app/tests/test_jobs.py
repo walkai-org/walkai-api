@@ -404,6 +404,7 @@ def test_get_job_run_detail_includes_volume_information(auth_client, db_session)
     assert run_data["first_started_at"] == run.first_started_at
     assert run_data["k8s_job_name"] == run.k8s_job_name
     assert run_data["k8s_pod_name"] == run.k8s_pod_name
+    assert run_data["image"] == job.image
     assert run_data["secret_names"] == []
     assert run_data["output_volume"] == {
         "id": output_volume.id,
@@ -441,6 +442,7 @@ def test_get_job_run_by_pod_returns_job_and_run(auth_client, db_session):
     assert data["status"] == run.status.value
     assert data["attempts"] == run.attempts
     assert data["first_started_at"] == run.first_started_at
+    assert data["image"] == job.image
     assert data["output_volume"]["id"] == output_volume.id
     assert data["secret_names"] == []
 
