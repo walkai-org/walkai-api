@@ -103,6 +103,7 @@ class JobRunSummary(JobRunBase):
 
 
 class JobRunDetail(JobRunSummary):
+    image: str
     secret_names: list[str]
     output_volume: VolumeOut
     input_volume: VolumeOut | None
