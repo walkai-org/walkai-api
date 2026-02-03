@@ -48,6 +48,7 @@ def _build_payload_json() -> dict:
                 "gpu": GPUProfile.g1_10.value,
                 "start_time": start.isoformat().replace("+00:00", "Z"),
                 "finish_time": None,
+                "priority": None,
             }
         ],
     }
@@ -167,6 +168,107 @@ def test_get_pods_returns_404_without_snapshot(auth_client):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Cluster insights not available"
+
+
+def test_get_pods_returns_priority_from_job_run(auth_client, db_session, test_user):
+    client, _ = auth_client
+    fake_ddb = FakeDynamoTable()
+    app.dependency_overrides[get_ddb_cluster_cache_table] = lambda: fake_ddb
+
+    job = Job(
+        image="repo/priority:latest",
+        gpu_profile=GPUProfile.g1_10,
+        created_by_id=test_user.id,
+        priority=JobPriority.extra_high,
+    )
+    out_volume = Volume(pvc_name="pvc-priority", size=10, is_input=False)
+    db_session.add_all([job, out_volume])
+    db_session.flush()
+
+    job_run = JobRun(
+        job_id=job.id,
+        status=RunStatus.active,
+        run_token="token-priority",
+        k8s_job_name="job-priority",
+        k8s_pod_name="pod-priority",
+        output_volume_id=out_volume.id,
+    )
+    db_session.add(job_run)
+    db_session.commit()
+
+    pod_start = datetime.now(UTC)
+    snapshot = ClusterInsightsIn(
+        ts=datetime.now(UTC),
+        gpus=[],
+        pods=[
+            Pod(
+                name="pod-priority",
+                namespace="walkai",
+                status=PodStatus.running,
+                gpu=GPUProfile.g1_10,
+                start_time=pod_start,
+                finish_time=None,
+            )
+        ],
+    )
+    fake_ddb.put_item(
+        Item={
+            "pk": cluster_service.INSIGHTS_PK,
+            "data": snapshot.model_dump_json(),
+            "updated_at": int(datetime.now(UTC).timestamp()),
+        }
+    )
+
+    try:
+        response = client.get("/cluster/pods")
+    finally:
+        app.dependency_overrides.pop(get_ddb_cluster_cache_table, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["name"] == "pod-priority"
+    assert body[0]["priority"] == JobPriority.extra_high.value
+
+
+def test_get_pods_returns_null_priority_without_job_run(auth_client):
+    client, _ = auth_client
+    fake_ddb = FakeDynamoTable()
+    app.dependency_overrides[get_ddb_cluster_cache_table] = lambda: fake_ddb
+
+    pod_start = datetime.now(UTC)
+    snapshot = ClusterInsightsIn(
+        ts=datetime.now(UTC),
+        gpus=[],
+        pods=[
+            Pod(
+                name="pod-missing",
+                namespace="walkai",
+                status=PodStatus.completed,
+                gpu=GPUProfile.g2_20,
+                start_time=pod_start,
+                finish_time=pod_start + timedelta(minutes=1),
+            )
+        ],
+    )
+    fake_ddb.put_item(
+        Item={
+            "pk": cluster_service.INSIGHTS_PK,
+            "data": snapshot.model_dump_json(),
+            "updated_at": int(datetime.now(UTC).timestamp()),
+        }
+    )
+
+    try:
+        response = client.get("/cluster/pods")
+    finally:
+        app.dependency_overrides.pop(get_ddb_cluster_cache_table, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["name"] == "pod-missing"
+    assert body[0]["priority"] is None
 
 
 def _fake_pod(*container_names: str) -> SimpleNamespace:

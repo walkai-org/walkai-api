@@ -3,7 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.jobs import GPUProfile
+from app.schemas.jobs import GPUProfile, JobPriority
 
 
 class GPUResources(BaseModel):
@@ -32,6 +32,7 @@ class Pod(BaseModel):
     gpu: GPUProfile
     start_time: datetime | None
     finish_time: datetime | None
+    priority: JobPriority | None = None
 
 
 class ClusterInsightsIn(BaseModel):

@@ -1,6 +1,6 @@
 from logging import getLogger
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from kubernetes import client
 from sqlalchemy.orm import Session
@@ -17,7 +17,7 @@ from app.schemas.cluster import (
     GPUResources,
     Pod,
 )
-from app.services import cluster_service
+from app.services import cluster_service, job_service
 
 router = APIRouter(prefix="/cluster", tags=["cluster"])
 settings = get_settings()
@@ -58,9 +58,22 @@ def get_resources(
 def get_pods(
     ddb_table=Depends(get_ddb_cluster_cache_table),
     _: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[Pod]:
     snapshot = cluster_service.get_insights(ddb_table)
-    return snapshot.pods
+    enriched: list[Pod] = []
+    for pod in snapshot.pods:
+        priority = None
+        try:
+            job_run = job_service.get_job_run_by_pod_name(db, pod.name)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+        else:
+            if job_run.job is not None:
+                priority = job_run.job.priority
+        enriched.append(pod.model_copy(update={"priority": priority}))
+    return enriched
 
 
 @router.get("/pods/{pod_name}/logs")
